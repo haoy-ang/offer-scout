@@ -174,4 +174,23 @@ public class JobApp {
     public int getMemorySize(String chatId) {
         return chatMemory.get(chatId).size();
     }
+
+    /**
+     * 带知识库的流式对话（RAG + SSE）。
+     * <p>
+     * 只有同步版的话，前端要干等十几秒才看到整段回答；检索本身很快，
+     * 慢的是模型生成，而这部分完全可以边生成边推送。
+     */
+    public Flux<String> doChatWithRagByStream(String message, String chatId) {
+        conversationService.ensureExists(chatId, message);
+
+        return chatClient.prompt()
+                .user(message)
+                .advisors(spec -> spec
+                        .advisors(questionAnswerAdvisor)
+                        .param(ChatMemory.CONVERSATION_ID, chatId))
+                .stream()
+                .content()
+                .doOnComplete(() -> conversationService.refreshMessageCount(chatId));
+    }
 }

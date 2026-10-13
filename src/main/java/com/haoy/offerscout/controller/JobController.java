@@ -56,6 +56,15 @@ public class JobController {
     }
 
     /**
+     * RAG 的流式版本，前端用它做打字机效果。
+     */
+    @GetMapping(value = "/chat/rag/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<String> chatWithRagSse(@RequestParam String message,
+                                       @RequestParam(required = false) String chatId) {
+        return jobApp.doChatWithRagByStream(message, resolveChatId(chatId));
+    }
+
+    /**
      * 没传会话 ID 就新建一个，保证每次调用都有独立上下文。
      */
     private String resolveChatId(String chatId) {

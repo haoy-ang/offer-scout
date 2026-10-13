@@ -150,11 +150,32 @@ public class ToolCallAgent extends ReActAgent {
         }
 
         String summary = toolResponseMessage.getResponses().stream()
-                .map(response -> "工具 " + response.name() + " 返回："
-                        + StrUtil.maxLength(String.valueOf(response.responseData()), 300))
+                .map(response -> "工具 " + response.name() + " 返回：" + preview(response.responseData()))
                 .collect(Collectors.joining("\n"));
         log.info("[{}] 工具执行结果：{}", getName(), summary);
         return summary;
+    }
+
+    /**
+     * 把工具返回值压成「一行、可读」的预览，供步骤轨迹展示。
+     * <p>
+     * <b>为什么要做这一步？</b>工具返回的字符串经过框架序列化后，会带上 JSON 转义 ——
+     * 外层多一对引号，内部的换行变成字面量 {@code \n}、引号变成 {@code \"}。
+     * 如果直接把它们拼进步骤摘要，前端轨迹里就会满屏 {@code \n} 和引号，完全没法看。
+     * 这里先把转义还原成真实字符，再把连续空白压成单个空格，最后截断。
+     */
+    private static String preview(Object data) {
+        String raw = String.valueOf(data);
+        if (raw.length() >= 2 && raw.startsWith("\"") && raw.endsWith("\"")) {
+            raw = raw.substring(1, raw.length() - 1);
+        }
+        raw = raw.replace("\\r\\n", " ")
+                .replace("\\n", " ")
+                .replace("\\t", " ")
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\");
+        raw = raw.replaceAll("\\s+", " ").trim();
+        return StrUtil.maxLength(raw, 300);
     }
 
     /**
