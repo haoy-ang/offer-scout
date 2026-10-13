@@ -21,7 +21,7 @@
 
 ## 技术栈
 
-- Java 17 + Spring Boot 3.4
+- Java 21 + Spring Boot 3.4
 - Spring AI 1.0 + Spring AI Alibaba（DashScope / qwen-plus）
 - RAG 知识库检索增强
 - ReAct 自主规划智能体
