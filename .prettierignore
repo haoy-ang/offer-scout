@@ -1,0 +1,7 @@
+# 这些目录/文件不参与格式化
+dist
+node_modules
+public
+
+# Markdown 交给编辑器/人工排版，Prettier 重排中文文档会把换行搞乱
+*.md

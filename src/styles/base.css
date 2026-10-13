@@ -23,10 +23,11 @@
   --pine-wash: #d4e0db;
   --amber: #a8761b;
 
-  --font-body: "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei",
-    system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Mono", "Consolas", "SFMono-Regular", "Courier New",
-    monospace;
+  --font-body:
+    'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui,
+    -apple-system, sans-serif;
+  --font-mono:
+    'JetBrains Mono', 'Cascadia Mono', 'Consolas', 'SFMono-Regular', 'Courier New', monospace;
 
   /* 刻意用近乎直角的圆角 —— 圆角越大越像消费级 App，越小越像档案 */
   --r-sm: 2px;
@@ -68,7 +69,8 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  background-image: linear-gradient(var(--rule) 1px, transparent 1px),
+  background-image:
+    linear-gradient(var(--rule) 1px, transparent 1px),
     linear-gradient(90deg, var(--rule) 1px, transparent 1px);
   background-size: 44px 44px;
   opacity: 0.22;
@@ -81,11 +83,8 @@ body::after {
   inset: 0;
   pointer-events: none;
   z-index: 1;
-  background-image: radial-gradient(
-      120% 90% at 88% -10%,
-      rgba(178, 58, 25, 0.09),
-      transparent 62%
-    ),
+  background-image:
+    radial-gradient(120% 90% at 88% -10%, rgba(178, 58, 25, 0.09), transparent 62%),
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.42'/%3E%3C/svg%3E");
   mix-blend-mode: multiply;
   opacity: 0.5;
@@ -174,7 +173,10 @@ body::after {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   cursor: pointer;
-  transition: transform 0.12s ease, background 0.15s ease, color 0.15s ease,
+  transition:
+    transform 0.12s ease,
+    background 0.15s ease,
+    color 0.15s ease,
     box-shadow 0.15s ease;
 }
 

@@ -90,7 +90,9 @@ function onStop() {
   border-radius: var(--r-md);
   background: var(--paper-2);
   box-shadow: var(--shadow-1);
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .composer__box:focus-within {

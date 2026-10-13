@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import Composer from '@/components/Composer.vue'
+import MessageComposer from '@/components/MessageComposer.vue'
 import MessageCard from '@/components/MessageCard.vue'
 import {
   interviewStream,
@@ -77,7 +77,8 @@ watch(turns, scrollToEnd, { deep: true })
 /** 复盘结论 → 视觉档位：通过=松绿，待定=琥珀，不通过=朱砂 */
 const verdict = computed(() => {
   const v = report.value?.verdict ?? ''
-  if (v.includes('通过') && !v.includes('不')) return { text: v, cls: 'score--pine', tag: 'tag--pine' }
+  if (v.includes('通过') && !v.includes('不'))
+    return { text: v, cls: 'score--pine', tag: 'tag--pine' }
   if (v.includes('不建议')) return { text: v, cls: 'score--ver', tag: 'tag--live' }
   return { text: v || '待定', cls: 'score--amber', tag: '' }
 })
@@ -129,7 +130,14 @@ async function send() {
   }
 
   try {
-    await interviewStream(sessionId.value, text, role.value.trim(), type.value, onChunk, controller.signal)
+    await interviewStream(
+      sessionId.value,
+      text,
+      role.value.trim(),
+      type.value,
+      onChunk,
+      controller.signal
+    )
   } catch (e) {
     if ((e as Error)?.name !== 'AbortError') {
       reply.error = true
@@ -204,13 +212,23 @@ onBeforeUnmount(() => controller?.abort())
           <template v-else-if="phase === 'report'">已复盘</template>
           <template v-else>待开始</template>
         </span>
-        <button v-if="phase === 'interview'" class="btn btn--ghost btn--tiny" :disabled="busy" @click="finish">
+        <button
+          v-if="phase === 'interview'"
+          class="btn btn--ghost btn--tiny"
+          :disabled="busy"
+          @click="finish"
+        >
           结束并复盘
         </button>
         <button v-if="phase === 'report'" class="btn btn--ghost btn--tiny" @click="backToInterview">
           回看对话
         </button>
-        <button v-if="phase !== 'setup'" class="btn btn--ghost btn--tiny" :disabled="busy" @click="restart">
+        <button
+          v-if="phase !== 'setup'"
+          class="btn btn--ghost btn--tiny"
+          :disabled="busy"
+          @click="restart"
+        >
           重新开始
         </button>
       </div>
@@ -266,9 +284,10 @@ onBeforeUnmount(() => controller?.abort())
         <div class="intro rise">
           <hr class="rule-x" />
           <p class="intro__desc">
-            面试官会<strong>一次只问一个问题</strong>，根据你的回答决定是追问还是换题，问满 6~8 题后收尾。
-            面试过程中它不会点评 —— 所有评价集中在最后的复盘里：<strong>能不能过 + 四个维度打分 + 具体短板怎么补</strong>。
-            回答得越具体（讲清思路和取舍），复盘才有料可评。
+            面试官会<strong>一次只问一个问题</strong>，根据你的回答决定是追问还是换题，问满 6~8
+            题后收尾。 面试过程中它不会点评 —— 所有评价集中在最后的复盘里：<strong
+              >能不能过 + 四个维度打分 + 具体短板怎么补</strong
+            >。 回答得越具体（讲清思路和取舍），复盘才有料可评。
           </p>
           <p v-if="error" class="intro__err">{{ error }}</p>
         </div>
@@ -330,7 +349,11 @@ onBeforeUnmount(() => controller?.abort())
                   <span class="dim__score" :class="dimTone(d.score)">{{ d.score }}</span>
                 </div>
                 <div class="dim__track">
-                  <span class="dim__fill" :class="dimTone(d.score)" :style="{ width: d.score + '%' }" />
+                  <span
+                    class="dim__fill"
+                    :class="dimTone(d.score)"
+                    :style="{ width: d.score + '%' }"
+                  />
                 </div>
                 <p class="dim__comment">{{ d.comment }}</p>
               </li>
@@ -395,7 +418,7 @@ onBeforeUnmount(() => controller?.abort())
     </div>
 
     <!-- 输入框只在面试进行中出现 -->
-    <Composer
+    <MessageComposer
       v-if="phase === 'interview'"
       v-model="draft"
       :busy="busy"
@@ -494,7 +517,9 @@ onBeforeUnmount(() => controller?.abort())
   font-family: var(--font-body);
   font-size: 14px;
   padding: 11px 13px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .setup__input:focus {

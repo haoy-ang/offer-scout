@@ -25,7 +25,9 @@ const busy = ref(false)
 
 const isRegister = computed(() => mode.value === 'register')
 
-const submitText = computed(() => (busy.value ? '处理中…' : isRegister.value ? '注册并进入' : '登录'))
+const submitText = computed(() =>
+  busy.value ? '处理中…' : isRegister.value ? '注册并进入' : '登录'
+)
 
 function switchMode(next: Mode) {
   if (busy.value) return
@@ -66,9 +68,10 @@ async function onSubmit() {
     setSession(result.token, result.user)
 
     const redirect = route.query.redirect
-    const target = typeof redirect === 'string' && redirect && !redirect.startsWith('/login')
-      ? redirect
-      : '/chat'
+    const target =
+      typeof redirect === 'string' && redirect && !redirect.startsWith('/login')
+        ? redirect
+        : '/chat'
     await router.replace(target)
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -262,7 +265,9 @@ async function onSubmit() {
   letter-spacing: 0.16em;
   color: var(--ink-3);
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .gate__tab:hover {
@@ -298,7 +303,9 @@ async function onSubmit() {
   color: var(--ink);
   font-family: var(--font-body);
   font-size: 14px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .field__input:focus {

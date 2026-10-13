@@ -91,7 +91,9 @@ onMounted(load)
 
         <div class="scroll archive__body">
           <p v-if="loading && !items.length" class="empty mono">读取中…</p>
-          <p v-else-if="!items.length" class="empty">暂无历史会话。<br />去「对话」页聊几句，这里就会出现记录。</p>
+          <p v-else-if="!items.length" class="empty">
+            暂无历史会话。<br />去「对话」页聊几句，这里就会出现记录。
+          </p>
 
           <button
             v-for="c in items"
@@ -101,9 +103,7 @@ onMounted(load)
             @click="open(c.id)"
           >
             <span class="conv__title">{{ c.title || '未命名会话' }}</span>
-            <span class="conv__meta mono">
-              {{ c.messageCount }} 条 · {{ fmt(c.updatedAt) }}
-            </span>
+            <span class="conv__meta mono"> {{ c.messageCount }} 条 · {{ fmt(c.updatedAt) }} </span>
             <span class="conv__del" title="删除会话" @click.stop="remove(c.id)">×</span>
           </button>
         </div>
@@ -215,7 +215,9 @@ onMounted(load)
   border-radius: var(--r-sm);
   background: transparent;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .conv:hover {
@@ -259,7 +261,10 @@ onMounted(load)
   font-size: 15px;
   line-height: 1;
   opacity: 0;
-  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease;
 }
 
 .conv:hover .conv__del {

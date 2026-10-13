@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { analyzeResume, type ResumeDiagnosis } from '@/api/client'
 import { hhmmss } from '@/utils/markdown'
 
@@ -153,7 +153,10 @@ onBeforeUnmount(stopTicker)
       <div class="resume__id">
         <span class="mono">材料</span>
         <code class="resume__idval">
-          {{ fileName || (pastedText.trim() ? '粘贴文本 · ' + pastedText.trim().length + ' 字' : '尚未提供') }}
+          {{
+            fileName ||
+            (pastedText.trim() ? '粘贴文本 · ' + pastedText.trim().length + ' 字' : '尚未提供')
+          }}
         </code>
       </div>
       <div class="resume__acts">
@@ -161,7 +164,11 @@ onBeforeUnmount(stopTicker)
           {{ busy ? '诊断中' : hasOutput ? '已出报告' : '待诊断' }}
           <template v-if="busy"> · {{ elapsed }}s</template>
         </span>
-        <button class="btn btn--ghost btn--tiny" :disabled="busy || (!hasOutput && !hasInput)" @click="reset">
+        <button
+          class="btn btn--ghost btn--tiny"
+          :disabled="busy || (!hasOutput && !hasInput)"
+          @click="reset"
+        >
           清空
         </button>
       </div>
@@ -202,7 +209,9 @@ onBeforeUnmount(stopTicker)
               <span class="dropzone__glyph dropzone__glyph--ok">✓</span>
               <p class="dropzone__title">{{ file.name }}</p>
               <p class="dropzone__hint">{{ formatSize(file.size) }} · 点击可替换</p>
-              <button class="btn btn--ghost btn--tiny" type="button" @click.stop="clearFile">移除</button>
+              <button class="btn btn--ghost btn--tiny" type="button" @click.stop="clearFile">
+                移除
+              </button>
             </template>
           </div>
 
@@ -266,7 +275,16 @@ onBeforeUnmount(stopTicker)
               <span class="scorecard__unit">/ 100</span>
             </div>
             <div class="scorecard__meta">
-              <span class="tag" :class="grade.cls === 'score--pine' ? 'tag--pine' : grade.cls === 'score--ver' ? 'tag--live' : ''">
+              <span
+                class="tag"
+                :class="
+                  grade.cls === 'score--pine'
+                    ? 'tag--pine'
+                    : grade.cls === 'score--ver'
+                      ? 'tag--live'
+                      : ''
+                "
+              >
                 {{ grade.text }}
               </span>
               <span class="mono">总评 · {{ reportTime }}</span>
@@ -288,7 +306,11 @@ onBeforeUnmount(stopTicker)
                 <span class="dim__score" :class="dimTone(d.score)">{{ d.score }}</span>
               </div>
               <div class="dim__track">
-                <span class="dim__fill" :class="dimTone(d.score)" :style="{ width: d.score + '%' }" />
+                <span
+                  class="dim__fill"
+                  :class="dimTone(d.score)"
+                  :style="{ width: d.score + '%' }"
+                />
               </div>
               <p class="dim__comment">{{ d.comment }}</p>
             </li>
@@ -408,7 +430,9 @@ onBeforeUnmount(stopTicker)
   line-height: 1.65;
   padding: 10px 12px;
   resize: vertical;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .input__ta:focus,
@@ -454,7 +478,9 @@ onBeforeUnmount(stopTicker)
   border-radius: var(--r-md);
   background: var(--paper);
   cursor: pointer;
-  transition: border-color 0.16s ease, background 0.16s ease;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease;
 }
 
 .dropzone:hover,

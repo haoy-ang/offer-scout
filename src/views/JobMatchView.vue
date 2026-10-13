@@ -155,7 +155,8 @@ onBeforeUnmount(stopTicker)
       <div class="match__id">
         <span class="mono">对照</span>
         <code class="match__idval">
-          {{ fileName || (resumeText.trim() ? '简历文本' : '简历未提供') }} · JD {{ jd.trim() ? jd.trim().length + ' 字' : '未提供' }}
+          {{ fileName || (resumeText.trim() ? '简历文本' : '简历未提供') }} · JD
+          {{ jd.trim() ? jd.trim().length + ' 字' : '未提供' }}
         </code>
       </div>
       <div class="match__acts">
@@ -163,7 +164,11 @@ onBeforeUnmount(stopTicker)
           {{ busy ? '匹配中' : hasOutput ? '已出报告' : '待匹配' }}
           <template v-if="busy"> · {{ elapsed }}s</template>
         </span>
-        <button class="btn btn--ghost btn--tiny" :disabled="busy || (!hasOutput && !hasInput)" @click="reset">
+        <button
+          class="btn btn--ghost btn--tiny"
+          :disabled="busy || (!hasOutput && !hasInput)"
+          @click="reset"
+        >
           清空
         </button>
       </div>
@@ -202,7 +207,9 @@ onBeforeUnmount(stopTicker)
               <span class="dropzone__glyph dropzone__glyph--ok">✓</span>
               <p class="dropzone__title">{{ file.name }}</p>
               <p class="dropzone__hint">{{ formatSize(file.size) }} · 点击可替换</p>
-              <button class="btn btn--ghost btn--tiny" type="button" @click.stop="clearFile">移除</button>
+              <button class="btn btn--ghost btn--tiny" type="button" @click.stop="clearFile">
+                移除
+              </button>
             </template>
           </div>
 
@@ -242,8 +249,9 @@ onBeforeUnmount(stopTicker)
       <div v-if="!hasOutput" class="intro rise">
         <hr class="rule-x" />
         <p class="intro__desc">
-          把一份岗位 JD 贴进来，AI 会逐条对照你的简历，告诉你<strong>哪些要求命中了、哪些还差着</strong>，
-          再给出「补哪个项目 / 改哪段经历」能直接提高通过率的具体动作。
+          把一份岗位 JD 贴进来，AI
+          会逐条对照你的简历，告诉你<strong>哪些要求命中了、哪些还差着</strong>， 再给出「补哪个项目
+          / 改哪段经历」能直接提高通过率的具体动作。
         </p>
       </div>
 
@@ -265,7 +273,16 @@ onBeforeUnmount(stopTicker)
               <span class="scorecard__unit">/ 100</span>
             </div>
             <div class="scorecard__meta">
-              <span class="tag" :class="grade.cls === 'score--pine' ? 'tag--pine' : grade.cls === 'score--ver' ? 'tag--live' : ''">
+              <span
+                class="tag"
+                :class="
+                  grade.cls === 'score--pine'
+                    ? 'tag--pine'
+                    : grade.cls === 'score--ver'
+                      ? 'tag--live'
+                      : ''
+                "
+              >
                 {{ grade.text }}
               </span>
               <span class="mono">匹配度 · {{ reportTime }}</span>
@@ -321,7 +338,11 @@ onBeforeUnmount(stopTicker)
                 <span class="dim__score" :class="dimTone(d.score)">{{ d.score }}</span>
               </div>
               <div class="dim__track">
-                <span class="dim__fill" :class="dimTone(d.score)" :style="{ width: d.score + '%' }" />
+                <span
+                  class="dim__fill"
+                  :class="dimTone(d.score)"
+                  :style="{ width: d.score + '%' }"
+                />
               </div>
               <p class="dim__comment">{{ d.comment }}</p>
             </li>
@@ -440,7 +461,9 @@ onBeforeUnmount(stopTicker)
   line-height: 1.65;
   padding: 10px 12px;
   resize: vertical;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .input__ta:focus {
@@ -486,7 +509,9 @@ onBeforeUnmount(stopTicker)
   border-radius: var(--r-md);
   background: var(--paper);
   cursor: pointer;
-  transition: border-color 0.16s ease, background 0.16s ease;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease;
 }
 
 .dropzone:hover,

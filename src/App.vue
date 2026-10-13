@@ -38,9 +38,7 @@ const healthText = computed(
 )
 
 /** 顶栏显示昵称，没有昵称就用用户名 */
-const displayName = computed(
-  () => currentUser.value?.nickname || currentUser.value?.username || ''
-)
+const displayName = computed(() => currentUser.value?.nickname || currentUser.value?.username || '')
 
 /** 没有头像，用昵称首字当标识 —— 比一个通用小人图标更有信息量 */
 const initial = computed(() => displayName.value.slice(0, 1).toUpperCase() || '?')

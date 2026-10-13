@@ -242,18 +242,26 @@ export async function streamSse(
  * 带上旧 token 没意义，401 也不该触发跳转。
  */
 export const register = (username: string, password: string, nickname?: string) =>
-  request<AuthResult>('/auth/register', {}, {
-    method: 'POST',
-    body: { username, password, nickname: nickname || undefined },
-    anonymous: true,
-  })
+  request<AuthResult>(
+    '/auth/register',
+    {},
+    {
+      method: 'POST',
+      body: { username, password, nickname: nickname || undefined },
+      anonymous: true,
+    }
+  )
 
 export const login = (username: string, password: string) =>
-  request<AuthResult>('/auth/login', {}, {
-    method: 'POST',
-    body: { username, password },
-    anonymous: true,
-  })
+  request<AuthResult>(
+    '/auth/login',
+    {},
+    {
+      method: 'POST',
+      body: { username, password },
+      anonymous: true,
+    }
+  )
 
 export const logout = () => request<{ success: boolean }>('/auth/logout', {}, { method: 'POST' })
 

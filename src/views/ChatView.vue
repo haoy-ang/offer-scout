@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import Composer from '@/components/Composer.vue'
+import MessageComposer from '@/components/MessageComposer.vue'
 import MessageCard from '@/components/MessageCard.vue'
 import { chatRagStream, chatStream } from '@/api/client'
 import { newChatId, hhmmss } from '@/utils/markdown'
@@ -89,7 +89,9 @@ async function send() {
     // 用户主动停止不算错误，保留已生成的内容即可
     if ((e as Error)?.name !== 'AbortError') {
       reply.error = true
-      reply.text = reply.text || `请求失败：${(e as Error).message}\n\n检查后端是否已启动（默认 http://localhost:8124）。`
+      reply.text =
+        reply.text ||
+        `请求失败：${(e as Error).message}\n\n检查后端是否已启动（默认 http://localhost:8124）。`
     }
   } finally {
     busy.value = false
@@ -159,7 +161,7 @@ onBeforeUnmount(() => controller?.abort())
       />
     </div>
 
-    <Composer
+    <MessageComposer
       v-model="draft"
       :busy="busy"
       :placeholder="config.placeholder"

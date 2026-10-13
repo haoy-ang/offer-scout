@@ -111,7 +111,10 @@ const navItems = computed(() =>
   border-radius: var(--r-sm);
   text-decoration: none;
   color: var(--ink-3);
-  transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+  transition:
+    color 0.16s ease,
+    background 0.16s ease,
+    border-color 0.16s ease;
 }
 
 .rail__item:hover {

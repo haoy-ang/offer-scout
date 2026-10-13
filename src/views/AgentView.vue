@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import Composer from '@/components/Composer.vue'
+import MessageComposer from '@/components/MessageComposer.vue'
 import MessageCard from '@/components/MessageCard.vue'
 import { agentRunStream } from '@/api/client'
 import { hhmmss } from '@/utils/markdown'
@@ -228,7 +228,7 @@ onBeforeUnmount(() => {
       </template>
     </div>
 
-    <Composer
+    <MessageComposer
       v-model="draft"
       :busy="busy"
       placeholder="描述你的目标或困惑，例如「帮我规划 3 个月的后端求职准备」…"
