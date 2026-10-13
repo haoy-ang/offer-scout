@@ -22,7 +22,7 @@
 | 登录鉴权 | JWT 无状态登录 + BCrypt 密码哈希 + 会话归属到用户（含越权防护） | ✅ 已实现 |
 | 简历诊断 | 上传 PDF 简历，解析后按目标岗位给出评分与逐条修改建议 | ✅ 已实现 |
 | 岗位匹配 | 简历对照 JD，算出「离这个岗位差多远」并逐条对出命中与差距 | ✅ 已实现 |
-| 模拟面试 | 扮演技术面试官 / HR，多轮追问并给出复盘 | ⬜ 规划中 |
+| 模拟面试 | AI 扮演面试官多轮追问，结束给结构化复盘与通过结论 | ✅ 已实现 |
 
 ## 技术栈
 
@@ -68,6 +68,9 @@
 | `DELETE /api/ai/conversation/{id}` | 删除会话（元数据与消息一起清，仅限本人） | 是 | 不限 |
 | `POST /api/ai/resume/analyze` | 简历诊断（`multipart/form-data`，传 `file` 或 `text`，可选 `targetJob`） | 是 | 5/min |
 | `POST /api/ai/match/analyze` | 岗位匹配（`multipart/form-data`，简历 `file`/`text` + 必填 `jd`） | 是 | 5/min |
+| `POST /api/ai/interview/start` | 开始模拟面试，返回会话 ID 与面试官开场白（`role` 可选 / `type` = tech\|hr\|mixed） | 是 | 5/min |
+| `GET /api/ai/interview/chat/sse` | 回答一轮，面试官追问（SSE 流式，带 `sessionId`） | 是 | 30/min |
+| `POST /api/ai/interview/report` | 结束面试，生成结构化复盘（带 `sessionId`） | 是 | 5/min |
 
 需登录的接口统一用请求头 `Authorization: Bearer <token>` 携带凭证；
 未携带或凭证失效时返回 `401` + `{"code":401,"message":"请先登录"}`。
@@ -306,6 +309,46 @@ BCrypt 内置可调工作因子（慢）+ 自带盐（免疫彩虹表），校�
    把 JD 里的每一条要求，和你简历里「有 / 没有」的证据一一对出来，而不是只给一个总分。
    差距点尤其要写透「缺了它对这个岗位意味着什么」，而不是一句"缺这个技能"。
 
+## 模拟面试
+
+和前面两个功能最大的不同：**它是本项目第一个真正的多轮交互**。诊断和匹配都是"一份材料进、一份报告出"，
+面试则要求面试官"记得住"前面问过什么、候选人答过什么 —— 这才是追问的前提。
+
+```
+开始 ──▶ 面试官开场 + 第 1 问（写入记忆）
+           │
+回答一轮 ──▶ 面试官带记忆追问（SSE 流式，继续写记忆）   ← 循环 6~8 轮
+           │
+结束 ──▶ 从记忆抽出整场记录 ──▶ 结构化复盘（能不能过 + 四维打分 + 短板怎么补）
+```
+
+**1. 靠 `ChatMemory` 而不是自己拼历史。** 每一轮都用同一个 `sessionId` 把消息写进
+`MessageWindowChatMemory`（落 MySQL），下一轮自动把历史带进上下文。面试官因此能"记得"你上一题
+答过什么。`MessageWindowChatMemory` 是滑动窗口（收窄到最近 N 条），一场面试十几轮远没到上限。
+
+**2. 两个 `ChatClient` 分工，是刻意的。**
+- `interviewClient`：**挂了** `MessageChatMemoryAdvisor`，负责开场和逐轮追问。
+- `reviewClient`：**裸的**，负责复盘。复盘输入就是"整场记录"本身，再叠一层记忆只会把历史重复喂一遍。
+这和简历诊断"绝不复用带记忆的 Client"是同一个道理，只是反过来用。
+
+**3. 面试官人设是动态的，所以每次现场拼 system prompt。** 它依赖岗位方向和面试类型（技术面 / HR 面 /
+综合面），不能做成 `defaultSystem`。拼接同样用 `String.replace` 换 `{{TYPE}}`、`{{ROLE}}`，
+不用 `formatted()`（见踩坑 6：提示词里的字面 `%` 会被当格式符）。
+
+**4. 面试中不评价，复盘才评价。** 提示词里明确要求面试官只提问、不解答、不给建议 ——
+否则模型很容易"边问边教"，一场面试就变成了答疑，失去模拟的价值。所有评估集中到一次复盘里。
+
+**5. 越权防护：没业务表可查归属时，把归属编进 ID。** 面试会话不落 `conversation` 表
+（它是一次性、不需要列在档案里的），所以没法像普通会话那样 `WHERE user_id = ?`。
+做法是让 `sessionId = itv-<userId>-<uuid>`，服务端只认「前缀 == 当前用户」的 ID，否则 `403`。
+这仍然是 IDOR 防护，只是判据从"查库"换成了"查 ID 本身"。
+
+**6. 复盘结构里多一个 `verdict`。** `InterviewReport` 除了分维度打分，还直接给出
+「建议通过 / 待定 / 不建议通过」——这才是模拟面试最有价值的产出：不是"你哪里差"，而是"这场能不能过"。
+
+> 复盘的输入是整场对话转写。这里有个细节：开场的"提示语"是以 USER 身份发出去的，
+> 会被记忆记下来，拼记录时必须**把它排除**，否则会被当成"候选人说的第一句话"污染评估。
+
 ## 踩坑记录
 
 ### 1. yml 缩进：顶级键插错位置，子键会静默"换爹"
@@ -390,6 +433,7 @@ offer-scout/
 │   ├── user/                        用户注册登录与仓储
 │   ├── resume/                      简历 PDF 解析 + 结构化诊断（ResumeParser/ResumeService/ResumeDiagnosis）
 │   ├── match/                       岗位匹配（JobMatchService/JobMatch，复用 resume.ResumeParser）
+│   ├── interview/                   模拟面试（InterviewService 多轮追问 + InterviewReport 结构化复盘）
 │   ├── common/                      业务异常与全局异常处理
 │   ├── cache/                       Redis 缓存封装
 │   ├── ratelimit/                   接口限流（注解 + 拦截器 + Lua 计数）
@@ -416,7 +460,7 @@ offer-scout/
 ├── api/client.ts        统一接口封装（带凭证、401 处理、SSE 解析）
 ├── stores/session.ts    登录态（token + 当前用户）
 ├── router/index.ts      路由表 + 登录守卫
-├── views/               对话 / 知识库问答 / 作战规划 / 会话档案 / 简历诊断 / 岗位匹配 / 登录
+├── views/               对话 / 知识库问答 / 作战规划 / 会话档案 / 简历诊断 / 岗位匹配 / 模拟面试 / 登录
 └── components/          左栏、消息卡、输入框
 ```
 
