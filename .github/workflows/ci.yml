@@ -1,0 +1,42 @@
+name: frontend-ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # npm ci 而不是 npm install：严格按 package-lock.json 安装，
+      # 保证 CI 装到的依赖版本和本地完全一致（install 可能会顺手升级）。
+      - name: Install dependencies
+        run: npm ci
+
+      # 三道静态检查 + 一次真实构建，顺序由快到慢：
+      #   type-check   vue-tsc 全量类型检查（类型错误在构建期就拦下）
+      #   lint         ESLint flat config 抓未使用变量、可疑写法等
+      #   format:check Prettier 校验风格统一（不一致直接报错，而不是默默改写）
+      #   build        vite 真实产物化，等价于本地 npm run build
+      - name: Type check
+        run: npm run type-check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Build
+        run: npm run build
