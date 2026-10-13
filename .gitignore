@@ -4,6 +4,13 @@ application-local.yml
 tmp/
 logs/
 
+# 向量库磁盘缓存（体积大、可由 document/ 重建，不入库）
+.vector-cache/
+
+# 第三方版权素材（面经等）：仅本地学习使用，不入库
+# 仓库里只保留自制素材（岗位 JD 样本、技术简历写法参考）
+src/main/resources/document/*面经*.md
+
 ### 编译产物 ###
 target/
 !.mvn/wrapper/maven-wrapper.jar
