@@ -30,10 +30,31 @@ function buildUrl(path: string, params: Record<string, string | undefined> = {})
   return qs ? `${BASE}${path}?${qs}` : `${BASE}${path}`
 }
 
+/**
+ * 从失败的响应里挖出人话。
+ * <p>
+ * 后端限流时返回的是 `{"code":429,"message":"请求太频繁了，请 12 秒后再试。"}`，
+ * 如果直接 `res.text()` 塞给用户，界面上就会出现一坨 JSON。
+ * 所以先试着按 JSON 解析、取 message 字段；解不出来（比如后端抛了堆栈）就原样返回。
+ */
+async function readError(res: Response): Promise<string> {
+  const raw = await res.text().catch(() => '')
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { message?: unknown }
+      if (typeof parsed?.message === 'string' && parsed.message) return parsed.message
+    } catch {
+      // 不是 JSON，原样返回
+    }
+    return raw
+  }
+  return res.statusText || `HTTP ${res.status}`
+}
+
 async function request<T>(path: string, params: Record<string, string | undefined> = {}): Promise<T> {
   const res = await fetch(buildUrl(path, params))
   if (!res.ok) {
-    throw new Error(`请求失败 ${res.status}：${await res.text().catch(() => res.statusText)}`)
+    throw new Error(`请求失败(${res.status})：${await readError(res)}`)
   }
   const contentType = res.headers.get('content-type') ?? ''
   // 后端可能直接返回纯文本（比如 Agent 的执行结果）
@@ -93,8 +114,12 @@ export async function streamSse(
   signal?: AbortSignal
 ): Promise<void> {
   const res = await fetch(buildUrl(path, params), { signal })
-  if (!res.ok || !res.body) {
-    throw new Error(`流式请求失败 ${res.status}`)
+  if (!res.ok) {
+    // 限流、参数错误等都会走到这里 —— 要把后端的中文提示透出来，而不是只报一个状态码
+    throw new Error(`请求失败(${res.status})：${await readError(res)}`)
+  }
+  if (!res.body) {
+    throw new Error('流式请求失败：响应没有可读的流')
   }
 
   const reader = res.body.getReader()
@@ -167,6 +192,6 @@ export const getConversationMessages = (id: string) =>
 
 export async function deleteConversation(id: string): Promise<boolean> {
   const res = await fetch(`${BASE}/ai/conversation/${encodeURIComponent(id)}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error(`删除失败 ${res.status}`)
+  if (!res.ok) throw new Error(`删除失败(${res.status})：${await readError(res)}`)
   return (await res.json()) as boolean
 }
