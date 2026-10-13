@@ -4,7 +4,13 @@
  * 所有请求都走相对路径 `/api`：
  * 开发期由 Vite 代理到 localhost:8124，生产期交给 Nginx 反代。
  * 业务代码里不出现任何 host，换环境不用改一行。
+ * <p>
+ * 这一层同时负责"带上登录凭证"和"处理登录失效"两件事 —— 放在这里而不是各个页面里，
+ * 是为了让每个调用点都不需要记得加 Authorization 头，也不会漏掉 401 的处理。
  */
+
+import { clearSession, getToken, type SessionUser } from '@/stores/session'
+import { router } from '@/router'
 
 const BASE = '/api'
 
@@ -19,6 +25,24 @@ export interface Conversation {
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool'
   content: string | null
+}
+
+export interface AuthResult {
+  token: string
+  expiresIn: number
+  user: SessionUser
+}
+
+interface RequestOptions {
+  method?: 'GET' | 'POST' | 'DELETE'
+  /** 请求体（会被 JSON 序列化）。有值时自动带上 Content-Type */
+  body?: unknown
+  /**
+   * 匿名请求：不带 token，且 401 不触发"跳登录页"。
+   * 登录/注册接口专用 —— 密码输错时后端返回 401，
+   * 如果不区分地当成"会话过期"，用户会看到一个莫名其妙的跳转，而不是"密码错误"。
+   */
+  anonymous?: boolean
 }
 
 function buildUrl(path: string, params: Record<string, string | undefined> = {}): string {
@@ -51,11 +75,50 @@ async function readError(res: Response): Promise<string> {
   return res.statusText || `HTTP ${res.status}`
 }
 
-async function request<T>(path: string, params: Record<string, string | undefined> = {}): Promise<T> {
-  const res = await fetch(buildUrl(path, params))
+/**
+ * 登录失效的统一处理：清掉本地凭证，把人送回登录页。
+ * <p>
+ * 带上 `redirect` 是为了登录成功后能回到原来那一页 —— 用户正在写第三次提问时
+ * 被踢去登录，登完发现回到首页、内容全没了，是很糟的体验。
+ */
+function handleUnauthorized(): void {
+  clearSession()
+  const current = router.currentRoute.value
+  if (current.name === 'login') return
+  router.replace({
+    name: 'login',
+    query: current.fullPath === '/' ? {} : { redirect: current.fullPath },
+  })
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+async function request<T>(
+  path: string,
+  params: Record<string, string | undefined> = {},
+  options: RequestOptions = {}
+): Promise<T> {
+  const headers: Record<string, string> = options.anonymous ? {} : authHeaders()
+  let body: string | undefined
+  if (options.body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    body = JSON.stringify(options.body)
+  }
+
+  const res = await fetch(buildUrl(path, params), {
+    method: options.method ?? 'GET',
+    headers,
+    body,
+  })
+
   if (!res.ok) {
+    if (res.status === 401 && !options.anonymous) handleUnauthorized()
     throw new Error(`请求失败(${res.status})：${await readError(res)}`)
   }
+
   const contentType = res.headers.get('content-type') ?? ''
   // 后端可能直接返回纯文本（比如 Agent 的执行结果）
   return (contentType.includes('application/json') ? await res.json() : await res.text()) as T
@@ -102,9 +165,9 @@ function parseSseEvent(block: string): string {
 /**
  * 消费 SSE 流。
  * <p>
- * 这里刻意不用浏览器的 EventSource：它只支持 GET、不能自定义请求头、
- * 出错时会自动重连（流正常结束时也会触发 error，很难区分「结束」和「失败」）。
- * 直接用 fetch + ReadableStream 读原始字节自己解析，能拿到明确的流结束信号，
+ * 这里刻意不用浏览器的 EventSource：它只支持 GET、**不能自定义请求头**（也就带不了
+ * Authorization）、出错时会自动重连（流正常结束时也会触发 error，很难区分"结束"和"失败"）。
+ * 直接用 fetch + ReadableStream 读原始字节自己解析，既拿得到明确的流结束信号，
  * 也能通过 AbortSignal 实现「停止生成」。
  */
 export async function streamSse(
@@ -113,9 +176,10 @@ export async function streamSse(
   onChunk: (chunk: string) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  const res = await fetch(buildUrl(path, params), { signal })
+  const res = await fetch(buildUrl(path, params), { headers: authHeaders(), signal })
   if (!res.ok) {
-    // 限流、参数错误等都会走到这里 —— 要把后端的中文提示透出来，而不是只报一个状态码
+    // 限流、参数错误、未登录等都会走到这里 —— 要把后端的中文提示透出来，而不是只报一个状态码
+    if (res.status === 401) handleUnauthorized()
     throw new Error(`请求失败(${res.status})：${await readError(res)}`)
   }
   if (!res.body) {
@@ -150,6 +214,33 @@ export async function streamSse(
     reader.cancel().catch(() => undefined)
   }
 }
+
+/* ---------------- 登录鉴权 ---------------- */
+
+/**
+ * 注册。
+ * <p>
+ * `anonymous: true` —— 这两个接口本来就是给"还没有身份"的人用的，
+ * 带上旧 token 没意义，401 也不该触发跳转。
+ */
+export const register = (username: string, password: string, nickname?: string) =>
+  request<AuthResult>('/auth/register', {}, {
+    method: 'POST',
+    body: { username, password, nickname: nickname || undefined },
+    anonymous: true,
+  })
+
+export const login = (username: string, password: string) =>
+  request<AuthResult>('/auth/login', {}, {
+    method: 'POST',
+    body: { username, password },
+    anonymous: true,
+  })
+
+export const logout = () => request<{ success: boolean }>('/auth/logout', {}, { method: 'POST' })
+
+/** 用本地 token 换当前用户信息：刷新页面后恢复用户显示，同时验证 token 是否还有效 */
+export const me = () => request<SessionUser>('/auth/me')
 
 /* ---------------- 对话 ---------------- */
 
@@ -190,8 +281,5 @@ export const listConversations = () => request<Conversation[]>('/ai/conversation
 export const getConversationMessages = (id: string) =>
   request<ChatMessage[]>(`/ai/conversation/${encodeURIComponent(id)}/messages`)
 
-export async function deleteConversation(id: string): Promise<boolean> {
-  const res = await fetch(`${BASE}/ai/conversation/${encodeURIComponent(id)}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error(`删除失败(${res.status})：${await readError(res)}`)
-  return (await res.json()) as boolean
-}
+export const deleteConversation = (id: string) =>
+  request<boolean>(`/ai/conversation/${encodeURIComponent(id)}`, {}, { method: 'DELETE' })

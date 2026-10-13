@@ -1,11 +1,21 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { isLoggedIn } from '@/stores/session'
 
 /**
  * 路由即信息架构：四个页面正好对应后端的四组能力。
  * 路由 meta 里带章节号，左栏导航和顶部面包屑都从同一处读取，不会两边写重复文案。
+ *
+ * meta.bare = true 的页面自成一套版式（不套左栏 + 顶栏的外壳），登录页属于这种。
  */
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/chat' },
+  {
+    path: '/login',
+    name: 'login',
+    component: () => import('@/views/LoginView.vue'),
+    // 没有 no / label，所以不会被左栏导航收进去
+    meta: { bare: true },
+  },
   {
     path: '/chat',
     name: 'chat',
@@ -38,4 +48,27 @@ const routes: RouteRecordRaw[] = [
 export const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+/**
+ * 登录守卫。
+ * <p>
+ * 判据只是"本地有没有 token"，**不在这里调接口验证 token 是否有效** ——
+ * 那会让每次跳转都多一次网络往返。真正无效的 token 会在第一个业务请求上撞到 401，
+ * 由 `api/client.ts` 统一清凭证并跳回登录页。
+ * <p>
+ * 这也是为什么两个方向都要拦：没 token 却想进业务页 → 去登录页；
+ * 有 token 还想去登录页 → 直接放回对话页，避免登录后再手动跳回来。
+ */
+router.beforeEach((to) => {
+  if (to.meta.bare) {
+    return isLoggedIn.value ? { path: '/chat' } : true
+  }
+  if (!isLoggedIn.value) {
+    return {
+      name: 'login',
+      query: to.fullPath === '/' ? {} : { redirect: to.fullPath },
+    }
+  }
+  return true
 })
