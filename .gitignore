@@ -1,0 +1,33 @@
+### 项目自定义 ###
+# 本地配置含 API Key，绝不能提交
+application-local.yml
+tmp/
+logs/
+
+### 编译产物 ###
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+### IntelliJ IDEA ###
+.idea/
+*.iml
+*.iws
+*.ipr
+
+### Eclipse / STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+
+### VS Code ###
+.vscode/
+
+### 系统文件 ###
+.DS_Store
+Thumbs.db
+
+### 日志 ###
+*.log

@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: offer-scout
+  profiles:
+    active: local
+
+server:
+  port: 8124
+  servlet:
+    context-path: /api
+
+# 接口文档（Knife4j）
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+  group-configs:
+    - group: 'default'
+      paths-to-match: '/**'
+      packages-to-scan: com.haoy.offerscout.controller
+
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+
+# 打开 Spring AI 的调试日志，能看到发给大模型的完整提示词
+logging:
+  level:
+    org.springframework.ai: DEBUG
