@@ -2,6 +2,7 @@ package com.haoy.offerscout.app;
 
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -11,7 +12,9 @@ import java.util.UUID;
  * RAG 集成测试。
  * <p>
  * 注意：会真实调用 Embedding + 对话接口，消耗少量额度。
+ * 打了 {@code requires-ai} 标签 —— CI 默认排除，不在流水线里花额度。
  */
+@Tag("requires-ai")
 @SpringBootTest
 class JobRagTest {
 

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -31,6 +32,7 @@ import static org.mockito.Mockito.when;
  * 这里用 Mockito 替换掉 {@code VectorStore}，通过「方法被调用了几次」来证明缓存真的生效 ——
  * 只看返回值是看不出区别的（有没有缓存，返回的都是同一段文本）。
  */
+@Tag("requires-infra")
 class JobKnowledgeToolCacheTest {
 
     private static LettuceConnectionFactory connectionFactory;

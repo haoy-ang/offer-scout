@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -26,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * 前置条件：本机 Redis 在 6379 上运行（见 README 环境要求）。
  */
+@Tag("requires-infra")
 class RateLimitInterceptorTest {
 
     private static final String KEY_PATTERN = "offerscout:ratelimit:*";

@@ -5,6 +5,7 @@ import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -28,7 +29,14 @@ import java.util.Optional;
  * <p>
  * 加了 {@code @Order} 是为了让「一次跑全量测试」时也有确定的先后顺序；
  * 但同一个 JVM 内跑通不算严格证明重启不丢，真正的证据是上面那两条分开执行的命令。
+ * <p>
+ * <b>为什么归类为 requires-ai，而不是 requires-infra</b>：只有 step2 是"纯读库"，
+ * step1 走的是真实链路 {@code jobApp.doChat(...)} —— 它必须真调一次大模型才能产出「助手回复」。
+ * 所以整个类要有可用密钥才能跑，CI 默认排除。
+ * （若想让它进 CI，得改成不经模型、直接往 {@code ChatMemory} 里塞消息 —— 但那就不再是
+ * 「真实对话链路能否落库」的证明了，会丢掉这条测试最想守住的东西。）
  */
+@Tag("requires-ai")
 @SpringBootTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class ConversationPersistenceTest {

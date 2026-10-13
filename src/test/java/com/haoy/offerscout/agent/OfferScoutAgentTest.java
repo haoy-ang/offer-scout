@@ -2,6 +2,7 @@ package com.haoy.offerscout.agent;
 
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -10,7 +11,9 @@ import org.springframework.boot.test.context.SpringBootTest;
  * Agent 集成测试。
  * <p>
  * 注意：会真实调用大模型并触发多轮工具调用，消耗的额度比普通对话高得多，别频繁跑。
+ * 打了 {@code requires-ai} 标签 —— CI 默认排除。
  */
+@Tag("requires-ai")
 @SpringBootTest
 class OfferScoutAgentTest {
 

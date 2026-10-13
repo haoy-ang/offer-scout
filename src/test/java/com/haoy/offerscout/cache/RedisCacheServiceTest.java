@@ -3,6 +3,7 @@ package com.haoy.offerscout.cache;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -21,6 +22,7 @@ import static org.mockito.Mockito.when;
  * <p>
  * 同样不启 Spring 上下文 —— 缓存只是「一个 Redis 连接 + 几个方法」，手工 new 更轻。
  */
+@Tag("requires-infra")
 class RedisCacheServiceTest {
 
     private static LettuceConnectionFactory connectionFactory;

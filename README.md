@@ -2,6 +2,16 @@
 
 > 一个基于 Spring AI 的智能求职助手：帮求职者做简历诊断、岗位匹配、模拟面试和求职知识问答。
 
+![Java](https://img.shields.io/badge/Java-21-007396?style=flat-square)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4-6DB33F?style=flat-square)
+![Spring AI](https://img.shields.io/badge/Spring%20AI-1.0-6DB33F?style=flat-square)
+![MySQL](https://img.shields.io/badge/MySQL-8-4479A1?style=flat-square)
+![Redis](https://img.shields.io/badge/Redis-8-DC382D?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
+
+**状态**：功能主干已完成 —— 后端单测 47 个全过（含真实模型集成测试）；测试按「依赖什么外部服务」分三档，CI 流水线已就位。
+配套前端在独立仓库 `offer-scout-web`（Vue 3 + Vite + TS）。
+
 ## 项目定位
 
 求职过程中最耗时间的不是刷题，而是**信息检索和反复试错**：这个岗位到底适不适合我？我的简历卡在哪？
@@ -114,6 +124,48 @@ document/
 
 > 首次启动需要对知识库做全量向量化（1000+ 片段），会慢几分钟；之后命中缓存，秒起。
 > MySQL 与 Redis 都是核心依赖，任一未启动应用都会启动失败。
+
+## 测试
+
+测试按「依赖什么外部服务」分成三档，用 JUnit 5 的 `@Tag` 标注。
+这样同一套用例既能本地全量跑，也能在 CI 里只跑**不需要密钥**的那部分。
+
+| 档位 | 标签 | 依赖 | 用例 |
+|---|---|---|---|
+| 纯 JVM | （无标签） | 无 —— 手动 `new`，不启 Spring | `StructuredOutputRetryTest`、`ConversationServiceOwnershipTest`、`JobDocumentLoaderTest` |
+| 需要基础设施 | `requires-infra` | MySQL / Redis | `RateLimitInterceptorTest`、`RedisCacheServiceTest`、`JobKnowledgeToolCacheTest`、`OfferScoutApplicationTests` |
+| 需要真实大模型 | `requires-ai` | 有效 DashScope API Key | `JobAppTest`、`JobRagTest`、`OfferScoutAgentTest`、`ConversationPersistenceTest` |
+
+三种跑法：
+
+```bash
+# ① 只跑纯 JVM 档：秒级、不依赖任何服务、不花钱 —— 改完逻辑先跑这个
+./mvnw test -DexcludedGroups=requires-ai,requires-infra
+
+# ② 跑 ① + ②（CI 用的就是这条）：需要本机 MySQL / Redis
+./mvnw test -DexcludedGroups=requires-ai
+
+# ③ 全量：会真实调用大模型、消耗额度，按需再跑
+./mvnw test
+```
+
+### 为什么这么分
+
+- **`requires-ai` 必须能一键排除。** 只要有一个用例需要真实密钥，整个流水线就绑死了 secret 和额度 ——
+  而本项目的大模型调用是**按量计费**的，不能让每次 push 都花钱。排除掉它，CI 才能对每个 PR 免费跑。
+- **`requires-infra` 用 service container 兜住，不跳过。** Redis / MySQL 在 CI 里由容器提供
+  （见 `.github/workflows/ci.yml`），所以这一档在流水线里是**照常执行**的。跳过它，CI 就只剩个编译检查，价值大打折扣。
+- **纯 JVM 档刻意不启 Spring 上下文。** 像重试逻辑这种纯函数，手工 `new` 就能完整覆盖，
+  没必要为了测一个 `for` 循环去加载向量库和 MySQL —— 快，而且不依赖环境。
+
+> **CI 怎么做到不需要任何密钥**：流水线设 `SPRING_PROFILES_ACTIVE=ci`，加载
+> `src/test/resources/application-ci.yml` —— 一份只连 localhost、只用**占位密钥**的配置。
+> 它放在 `src/test/resources`，只在跑测试时上 classpath，不会进打包产物。
+>
+> ⚠️ 占位密钥**不会让调用快速失败**。DashScope 的调用套在 Spring AI 的 `RetryTemplate` 里，
+> 401（`InvalidApiKey`）同样会被重试并退避 —— 实测一条"误入 CI 的 `requires-ai` 用例"跑了
+> 2 分半才报错（日志里是 `Retry error. Retry count: 1`）。所以核对"分档有没有生效"时，
+> 要看 `Tests run` 的**数字**，不能只看"跑完了"。
 
 ## 数据存储
 

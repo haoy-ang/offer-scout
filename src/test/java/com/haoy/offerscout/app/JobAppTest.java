@@ -2,6 +2,7 @@ package com.haoy.offerscout.app;
 
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -11,7 +12,9 @@ import java.util.UUID;
  * 求职助手应用测试。
  * <p>
  * 注意：这是真实调用大模型的集成测试，会消耗少量额度。
+ * 因此打了 {@code requires-ai} 标签 —— CI 用 {@code -DexcludedGroups=requires-ai} 排除，只有本地显式跑全量时才会执行。
  */
+@Tag("requires-ai")
 @SpringBootTest
 class JobAppTest {
 

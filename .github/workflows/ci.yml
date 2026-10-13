@@ -1,0 +1,62 @@
+name: backend-ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # 测试分三档（见 README「测试」一节）：
+    #   · 纯 JVM（无标签）  —— 不依赖任何外部服务，任何机器都能跑
+    #   · requires-infra    —— 需要 MySQL / Redis，由下面两个 service container 提供
+    #   · requires-ai       —— 需要真实大模型 API Key，CI 一律排除（不花额度、不依赖 secret）
+    # 因此这一步实际跑的是「纯 JVM + requires-infra」两档。
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: offer_scout
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+      redis:
+        # 本地开发用的是 Redis 8；CI 用 7-alpine 更小更稳，本项目只用到
+        # INCR / EXPIRE / GET / SET，两个大版本行为一致。
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      # 切到 src/test/resources/application-ci.yml（占位密钥 + localhost 基础设施），
+      # 这样流水线不需要配置任何真实密钥。
+      SPRING_PROFILES_ACTIVE: ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Run tests (exclude requires-ai)
+        # 用 runner 自带的 Maven，而不是 ./mvnw：wrapper 的 distributionUrl 指向阿里云镜像
+        # （本地下载快），在海外 runner 上反而不稳；版本差异对本项目没有影响。
+        run: mvn -B -ntp test -DexcludedGroups=requires-ai
