@@ -16,6 +16,7 @@
 |---|---|---|
 | 知识问答 | 基于面经、岗位 JD 知识库的检索增强问答（RAG） | ✅ 已实现 |
 | 求职规划 Agent | 自主检索知识库 → 产出结构化准备方案（ReAct 循环） | ✅ 已实现 |
+| 会话持久化 | 对话记忆落 MySQL，重启不丢；会话列表 / 历史 / 删除 | ✅ 已实现 |
 | 简历诊断 | 上传 PDF 简历，解析后按目标岗位给出评分与逐条修改建议 | ⬜ 规划中 |
 | 岗位匹配 | 自主检索岗位要求，与简历做对比，输出匹配度报告 | ⬜ 规划中 |
 | 模拟面试 | 扮演技术面试官 / HR，多轮追问并给出复盘 | ⬜ 规划中 |
@@ -26,6 +27,7 @@
 - Spring AI 1.0 + Spring AI Alibaba（DashScope / qwen-plus / text-embedding-v3）
 - RAG 知识库检索增强（Markdown 文档切分 + 向量检索 + 磁盘缓存）
 - ReAct 自主规划智能体（工具调用循环 + 状态机）
+- MySQL 8 + Spring JDBC（对话记忆持久化、会话元数据）
 - SSE 流式输出
 - Vue 3 + Vite（前端，独立仓库 `offer-scout-web`）
 
@@ -41,6 +43,9 @@
 | `GET /api/ai/job/chat/rag` | 知识库问答（RAG 检索增强） |
 | `GET /api/ai/agent/run` | 求职规划 Agent（同步，跑完整循环后返回结论） |
 | `GET /api/ai/agent/run/sse` | 求职规划 Agent（SSE，逐步推送思考与工具调用） |
+| `GET /api/ai/conversation/list` | 会话列表（按最后活跃时间倒序） |
+| `GET /api/ai/conversation/{id}/messages` | 某个会话的聊天记录 |
+| `DELETE /api/ai/conversation/{id}` | 删除会话（元数据与消息一起清） |
 
 接口文档：<http://localhost:8124/api/swagger-ui.html>
 
@@ -62,16 +67,37 @@ document/
 ## 快速开始
 
 1. 申请阿里云百炼 API Key：<https://bailian.console.aliyun.com/>
-2. 配置密钥——两种方式任选其一：
+2. 准备 MySQL 8（默认 `localhost:3306`）。**数据库不用手动建** ——
+   连接串里有 `createDatabaseIfNotExist=true`，表结构由 `src/main/resources/db/schema.sql` 自动初始化。
+3. 配置密钥与数据库连接——两种方式任选其一：
    - 设置环境变量 `DASHSCOPE_API_KEY`
-   - 或直接编辑 `src/main/resources/application-local.yml`
-3. 启动：
+   - 或直接编辑 `src/main/resources/application-local.yml`（含 DashScope Key 与 MySQL 账号密码）
+4. 启动：
 
 ```bash
 ./mvnw spring-boot:run
 ```
 
 > 首次启动需要对知识库做全量向量化（1000+ 片段），会慢几分钟；之后命中缓存，秒起。
+> 若 MySQL 未启动，应用会启动失败 —— 数据库现在是核心依赖，不再是可选项。
+
+## 数据存储
+
+| 表 | 归属 | 作用 |
+|---|---|---|
+| `SPRING_AI_CHAT_MEMORY` | Spring AI 框架读写 | 对话消息正文 |
+| `conversation` | 本项目维护 | 会话元数据（标题、消息数、活跃时间），供会话列表使用 |
+
+两处容易踩的坑，都已在本项目里处理：
+
+1. **Spring AI 1.0.0 没带 MySQL 的建表脚本**（只有 hsqldb / mariadb / postgresql / sqlserver）。
+   平台自动探测出 `mysql` 后会去找 `schema-mysql.sql`，找不到直接启动失败。
+   → 配置 `initialize-schema: never`，建表交给 `db/schema.sql`。
+2. **MySQL 8 不支持 `CREATE INDEX IF NOT EXISTS`**（那是 MariaDB 语法）。
+   → 索引写进 `CREATE TABLE` 的 `KEY` 子句，配合 `IF NOT EXISTS` 天然幂等。
+
+另外 `MessageWindowChatMemory` 是**滑动窗口**：保存时会用裁剪后的窗口覆盖数据库，
+所以 `SPRING_AI_CHAT_MEMORY` 里只保留最近 `maxMessages` 条，不是全量聊天记录。
 
 ## 目录结构
 
@@ -81,6 +107,8 @@ offer-scout/
 │   ├── OfferScoutApplication.java   启动类
 │   ├── controller/                  HTTP / SSE 接口层
 │   ├── app/                         求职助手应用层（对话）
+│   ├── chat/                        会话元数据与记忆管理
+│   ├── config/                      对话记忆等 Bean 配置
 │   ├── rag/                         知识库加载 + 向量库配置
 │   ├── tools/                       AI 可调用的工具（知识库检索 / 时间 / 终止）
 │   ├── agent/                       ReAct 自主规划智能体
@@ -92,7 +120,8 @@ offer-scout/
 │   └── advisor/                     自定义 Advisor（日志、增强）
 └── src/main/resources/
     ├── application.yml              主配置
-    ├── application-local.yml        本地配置（含密钥，不入库）
+    ├── application-local.yml        本地配置（含密钥与数据库密码，不入库）
+    ├── db/schema.sql                业务表结构
     └── document/                    知识库原始文档
 ```
 

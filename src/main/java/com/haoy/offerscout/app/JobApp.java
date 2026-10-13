@@ -1,12 +1,11 @@
 package com.haoy.offerscout.app;
 
+import com.haoy.offerscout.chat.ConversationService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
-import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -21,12 +20,21 @@ import java.time.LocalDate;
  * <p>
  * 这是应用层：负责系统提示词、对话记忆和调用方式，
  * 业务能力（简历诊断、岗位匹配、模拟面试）后续会逐步加到这个类里。
+ * <p>
+ * 对话记忆不再自己 new，而是注入 {@link ChatMemory} Bean ——
+ * 底层的存储实现（内存 / MySQL）由配置决定，应用层不关心。
  */
 @Component
 @Slf4j
 public class JobApp {
 
     private final ChatClient chatClient;
+
+    /** 会话元数据与消息记忆的读写入口 */
+    private final ConversationService conversationService;
+
+    /** 用于回读真实消息条数（滑动窗口的条数不能靠自增推算） */
+    private final ChatMemory chatMemory;
 
     /**
      * RAG Advisor：检索增强。
@@ -61,12 +69,12 @@ public class JobApp {
             - 不编造用户没有的经历，信息不确定时向用户确认。
             """;
 
-    public JobApp(ChatModel dashscopeChatModel, SimpleVectorStore jobVectorStore) {
-        // 基于内存的对话记忆：保留最近 20 条消息，超出后自动丢弃最早的
-        MessageWindowChatMemory chatMemory = MessageWindowChatMemory.builder()
-                .chatMemoryRepository(new InMemoryChatMemoryRepository())
-                .maxMessages(20)
-                .build();
+    public JobApp(ChatModel dashscopeChatModel,
+                  SimpleVectorStore jobVectorStore,
+                  ChatMemory chatMemory,
+                  ConversationService conversationService) {
+        this.chatMemory = chatMemory;
+        this.conversationService = conversationService;
 
         // 检索配置：取相似度最高的 4 段；similarityThreshold 为 0 表示不做阈值过滤（先保证能召回）
         this.questionAnswerAdvisor = QuestionAnswerAdvisor.builder(jobVectorStore)
@@ -96,6 +104,8 @@ public class JobApp {
      * @return AI 的完整回复
      */
     public String doChat(String message, String chatId) {
+        conversationService.ensureExists(chatId, message);
+
         ChatResponse response = chatClient.prompt()
                 .user(message)
                 .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, chatId))
@@ -106,6 +116,8 @@ public class JobApp {
                 ? null
                 : response.getResult().getOutput().getText();
         log.info("chatId={} 用户: {} | 回复: {}", chatId, message, content);
+
+        conversationService.refreshMessageCount(chatId);
         return content;
     }
 
@@ -117,11 +129,15 @@ public class JobApp {
      * @return 逐段返回的文本流
      */
     public Flux<String> doChatByStream(String message, String chatId) {
+        conversationService.ensureExists(chatId, message);
+
         return chatClient.prompt()
                 .user(message)
                 .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, chatId))
                 .stream()
-                .content();
+                .content()
+                // 流是懒执行的：必须等它真正跑完，消息才写入记忆，这时回读条数才有意义
+                .doOnComplete(() -> conversationService.refreshMessageCount(chatId));
     }
 
     /**
@@ -135,6 +151,8 @@ public class JobApp {
      * @return AI 的完整回复
      */
     public String doChatWithRag(String message, String chatId) {
+        conversationService.ensureExists(chatId, message);
+
         ChatResponse response = chatClient.prompt()
                 .user(message)
                 .advisors(spec -> spec
@@ -147,6 +165,13 @@ public class JobApp {
                 ? null
                 : response.getResult().getOutput().getText();
         log.info("chatId={} [RAG] 用户: {} | 回复: {}", chatId, message, content);
+
+        conversationService.refreshMessageCount(chatId);
         return content;
+    }
+
+    /** 供测试/接口层查看某会话当前记忆条数 */
+    public int getMemorySize(String chatId) {
+        return chatMemory.get(chatId).size();
     }
 }
