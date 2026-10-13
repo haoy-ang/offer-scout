@@ -33,6 +33,14 @@ export interface AuthResult {
   user: SessionUser
 }
 
+/** 简历诊断结果（和后端 ResumeDiagnosis record 一一对应） */
+export interface ResumeDiagnosis {
+  overallScore: number
+  summary: string
+  dimensions: { name: string; score: number; comment: string }[]
+  suggestions: { priority: 'high' | 'medium' | 'low'; problem: string; fix: string }[]
+}
+
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'DELETE'
   /** 请求体（会被 JSON 序列化）。有值时自动带上 Content-Type */
@@ -283,3 +291,35 @@ export const getConversationMessages = (id: string) =>
 
 export const deleteConversation = (id: string) =>
   request<boolean>(`/ai/conversation/${encodeURIComponent(id)}`, {}, { method: 'DELETE' })
+
+/* ---------------- 简历诊断 ---------------- */
+
+/**
+ * 上传简历（PDF 文件或粘贴文本）并拿到结构化诊断。
+ * <p>
+ * 这里不走上面的 {@link request}，是因为它只能序列化 JSON body；
+ * 简历上传是 {@code multipart/form-data}，必须用 FormData 交给 fetch 自己设
+ * Content-Type（浏览器会自动带上 boundary 分隔符，手动设反而会漏掉）。
+ */
+export async function analyzeResume(input: {
+  file?: File | null
+  text?: string
+  targetJob?: string
+}): Promise<ResumeDiagnosis> {
+  const form = new FormData()
+  if (input.file) form.append('file', input.file)
+  if (input.text) form.append('text', input.text)
+  if (input.targetJob) form.append('targetJob', input.targetJob)
+
+  const res = await fetch(`${BASE}/ai/resume/analyze`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  })
+
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized()
+    throw new Error(`请求失败(${res.status})：${await readError(res)}`)
+  }
+  return (await res.json()) as ResumeDiagnosis
+}

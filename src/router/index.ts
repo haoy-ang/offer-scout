@@ -42,6 +42,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/ArchiveView.vue'),
     meta: { no: '04', label: '会话档案', hint: '历史会话记录与清理' },
   },
+  {
+    path: '/resume',
+    name: 'resume',
+    component: () => import('@/views/ResumeView.vue'),
+    meta: { no: '05', label: '简历诊断', hint: '上传简历，AI 逐项打分并给出改法' },
+  },
   { path: '/:pathMatch(.*)*', redirect: '/chat' },
 ]
 
