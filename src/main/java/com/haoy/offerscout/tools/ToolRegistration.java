@@ -1,5 +1,6 @@
 package com.haoy.offerscout.tools;
 
+import com.haoy.offerscout.cache.RedisCacheService;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -24,9 +25,9 @@ public class ToolRegistration {
      * 而不是让 Spring AI 在调用 ChatClient 时自动执行。
      */
     @Bean
-    public ToolCallback[] offerScoutTools(VectorStore jobVectorStore) {
+    public ToolCallback[] offerScoutTools(VectorStore jobVectorStore, RedisCacheService cacheService) {
         return ToolCallbacks.from(
-                new JobKnowledgeTool(jobVectorStore),
+                new JobKnowledgeTool(jobVectorStore, cacheService),
                 new DateTimeTool(),
                 new TerminateTool()
         );

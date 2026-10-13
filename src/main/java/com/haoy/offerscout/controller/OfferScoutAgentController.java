@@ -2,6 +2,7 @@ package com.haoy.offerscout.controller;
 
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.agent.OfferScoutAgent;
+import com.haoy.offerscout.ratelimit.RateLimit;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
@@ -19,6 +20,11 @@ import java.util.concurrent.CompletableFuture;
  * <p>
  * 注入 {@link ObjectProvider} 而不是直接注入 {@link OfferScoutAgent}：
  * 因为 Agent 是 prototype 作用域，每次都取一个新实例，避免并发请求共享同一份可变状态。
+ * <p>
+ * <b>这里限流比其他接口紧得多（3 次/分钟）</b>：普通对话一次调用 = 一次大模型请求，
+ * 而 Agent 一个任务要跑 3~8 步，每步都是一次完整的 LLM 请求（还带工具调用往返）。
+ * 也就是说一次 Agent 调用的成本约等于十次普通对话 —— 限流额度必须按调用成本来定，
+ * 而不是所有接口一刀切。
  */
 @RestController
 @RequestMapping("/ai/agent")
@@ -36,6 +42,7 @@ public class OfferScoutAgentController {
      * 适合接口调试；Agent 可能跑好几步，请给足超时时间。
      */
     @GetMapping("/run")
+    @RateLimit(limit = 3, windowSeconds = 60, message = "Agent 任务比较耗资源，每分钟最多发起 3 次，请稍后再试。")
     public String run(@RequestParam String message) {
         if (StrUtil.isBlank(message)) {
             return "任务描述不能为空";
@@ -53,6 +60,7 @@ public class OfferScoutAgentController {
      * 这样用户不用干等几十秒，能看到 Agent 正在干什么。
      */
     @GetMapping(value = "/run/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @RateLimit(limit = 3, windowSeconds = 60, message = "Agent 任务比较耗资源，每分钟最多发起 3 次，请稍后再试。")
     public SseEmitter runSse(@RequestParam String message) {
         SseEmitter emitter = new SseEmitter(300_000L);
         OfferScoutAgent agent = agentProvider.getObject();

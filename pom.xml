@@ -63,6 +63,12 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Redis：接口限流计数器 + 热点数据缓存（本机 6379） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <!-- Spring AI 官方 JDBC 会话记忆仓库：把对话消息存进数据库，重启不丢 -->
         <dependency>
             <groupId>org.springframework.ai</groupId>

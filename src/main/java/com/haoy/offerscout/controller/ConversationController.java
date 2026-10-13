@@ -3,6 +3,7 @@ package com.haoy.offerscout.controller;
 import com.haoy.offerscout.chat.ChatMessageVO;
 import com.haoy.offerscout.chat.Conversation;
 import com.haoy.offerscout.chat.ConversationService;
+import com.haoy.offerscout.ratelimit.RateLimit;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -27,8 +28,14 @@ public class ConversationController {
         this.conversationService = conversationService;
     }
 
-    /** 会话列表，按最后活跃时间倒序 */
+    /**
+     * 会话列表，按最后活跃时间倒序。
+     * <p>
+     * 这里限流额度给得宽（60 次/分钟）：读接口本身不烧钱，加限流主要是兜一层底，
+     * 防止前端写错轮询逻辑把数据库打满。额度按「调用成本」定，这个口径比一刀切合理。
+     */
     @GetMapping("/list")
+    @RateLimit(limit = 60, windowSeconds = 60)
     public List<Conversation> list() {
         return conversationService.list();
     }
