@@ -132,6 +132,12 @@
             <artifactId>spring-ai-markdown-document-reader</artifactId>
         </dependency>
 
+        <!-- 简历诊断：解析 PDF 简历（底层是 Apache PdfBox） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-pdf-document-reader</artifactId>
+        </dependency>
+
         <!-- 结构化输出：让大模型直接把结果映射成 Java 对象 -->
         <dependency>
             <groupId>com.github.victools</groupId>

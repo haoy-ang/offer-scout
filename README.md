@@ -20,7 +20,7 @@
 | 接口限流 | 基于 Redis 的固定窗口限流，按调用成本分档，超限返回 429 | ✅ 已实现 |
 | 检索缓存 | 知识库检索结果按 query 缓存，省掉重复的 Embedding 调用 | ✅ 已实现 |
 | 登录鉴权 | JWT 无状态登录 + BCrypt 密码哈希 + 会话归属到用户（含越权防护） | ✅ 已实现 |
-| 简历诊断 | 上传 PDF 简历，解析后按目标岗位给出评分与逐条修改建议 | ⬜ 规划中 |
+| 简历诊断 | 上传 PDF 简历，解析后按目标岗位给出评分与逐条修改建议 | ✅ 已实现 |
 | 岗位匹配 | 自主检索岗位要求，与简历做对比，输出匹配度报告 | ⬜ 规划中 |
 | 模拟面试 | 扮演技术面试官 / HR，多轮追问并给出复盘 | ⬜ 规划中 |
 
@@ -66,6 +66,7 @@
 | `GET /api/ai/conversation/list` | 当前用户的会话列表（按最后活跃时间倒序） | 是 | 60/min |
 | `GET /api/ai/conversation/{id}/messages` | 某个会话的聊天记录（仅限本人） | 是 | 不限 |
 | `DELETE /api/ai/conversation/{id}` | 删除会话（元数据与消息一起清，仅限本人） | 是 | 不限 |
+| `POST /api/ai/resume/analyze` | 简历诊断（`multipart/form-data`，传 `file` 或 `text`，可选 `targetJob`） | 是 | 5/min |
 
 需登录的接口统一用请求头 `Authorization: Bearer <token>` 携带凭证；
 未携带或凭证失效时返回 `401` + `{"code":401,"message":"请先登录"}`。
@@ -262,6 +263,36 @@ BCrypt 内置可调工作因子（慢）+ 自带盐（免疫彩虹表），校�
    （`JobApp` 的 `userId` 参数就是这么来的），要么确保鉴权在异步开始前已经完成
    （`@RequireLogin` 在 `preHandle` 阶段就拦下了未登录请求，Agent 的异步线程里不需要再判一次）。
 
+## 简历诊断
+
+上传一份简历（PDF 或粘贴文本），从**技术栈清晰度、项目经历深度、量化表达、表达与结构**四个维度逐项打分，
+并给出「把 XX 改成 XX」级别的可执行修改建议。核心链路只有三步：
+
+```
+上传 PDF ──PagePdfDocumentReader(PdfBox)──▶ 提取纯文本
+        │                                    │
+        └──（无 PDF 时）直接粘贴文本 ◀────────┘
+                    │
+                    ▼
+        知识库检索「简历写法」参考 ──▶ 拼进提示词
+                    │
+                    ▼
+        ChatClient.call().entity(ResumeDiagnosis.class) ──▶ 结构化 JSON 返回
+```
+
+几个关键设计：
+
+1. **结构化输出，而不是让模型吐一段评测文字。** `ResumeDiagnosis` 是 `record` + 嵌套 `record`，
+   `.entity(ResumeDiagnosis.class)` 会把它自动转成 JSON Schema 塞进提示词，模型照着吐 JSON，
+   Spring AI 再反序列化回来。字段名、类型、层级在编译期就定死，前端不用猜结构。
+2. **评分用 `int` 不用浮点。** 大模型对"72.4 分"没有精度可言，反而容易吐 `"72"` 或 `72.0` 造成类型不匹配。
+   整数约束它输出整数，解析更稳。
+3. **裸 `ChatClient`，不带记忆 Advisor。** 简历诊断是无状态的一次性调用，绝不能复用挂会话记忆的
+   `JobApp` Client——否则上一份简历的内容会泄漏进下一份诊断里。
+4. **PDF 只提取文本层。** PdfBox 拿不到扫描件/图片型 PDF 的正文，提取为空时返回明确的 400 提示，
+   而不是返回一份空诊断。接口同时接受「粘贴文本」作为这条路的兜底。
+5. **检索失败不阻断诊断。** 知识库召回失败时降级为"按通用简历标准诊断"，而不是整个接口 500。
+
 ## 踩坑记录
 
 ### 1. yml 缩进：顶级键插错位置，子键会静默"换爹"
@@ -313,6 +344,26 @@ DELETE 在 HTTP 语义里应当**幂等**：删一个已经不存在的东西，
 UPDATE conversation SET user_id = 1 WHERE user_id IS NULL;
 ```
 
+### 6. `String.formatted()` 会把提示词里的字面 `%` 当格式占位符
+
+简历诊断的 system 提示词里有一句「性能提升 **X%**、处理量 Y…」。用 `""".formatted(reference)` 拼接时，
+`formatted()` 会把**整段文本里所有的 `%`** 都当格式说明符解析：`X%` 后面的「、」不是合法转换符，
+直接抛 `UnknownFormatConversionException`（提示词里真正的 `%s` 占位符反而成了无辜群众）。
+
+教训：**含中文 / 含 `%` 的提示词不要用 `String.formatted()`**，改用 `replace` 换一个不会出现在正文里的
+token（本项目用 `{{REFERENCE}}`）。这个坑在写 prompt 模板时几乎必踩。
+
+### 7. `consumes = MULTIPART_FORM_DATA_VALUE` 会让「非 multipart 请求」在鉴权前就 415
+
+`@PostMapping(consumes = MULTIPART_FORM_DATA_VALUE)` 的 `consumes` 是**路由匹配条件**，
+请求的 Content-Type 不匹配时，`RequestMappingHandlerMapping` 直接判不中这个 handler，
+拦截器（含鉴权拦截器）根本不会执行。所以一个**没带 multipart 头、也没带 token** 的请求拿到的是
+`415 Unsupported Media Type`，而不是预期的 `401`。
+
+这不是安全漏洞（415 同样是拒绝），但验证鉴权链路时容易误判"鉴权失效了"。
+真实前端永远用 `FormData` 上传（自动带 multipart 头），不受影响；写脚本验证时记得也给空请求挂个
+`new FormData()`。
+
 ## 目录结构
 
 ```
@@ -324,6 +375,7 @@ offer-scout/
 │   ├── chat/                        会话元数据与记忆管理（含归属校验）
 │   ├── auth/                        JWT 签发校验、拦截器、登出黑名单、UserContext
 │   ├── user/                        用户注册登录与仓储
+│   ├── resume/                      简历 PDF 解析 + 结构化诊断（ResumeParser/ResumeService/ResumeDiagnosis）
 │   ├── common/                      业务异常与全局异常处理
 │   ├── cache/                       Redis 缓存封装
 │   ├── ratelimit/                   接口限流（注解 + 拦截器 + Lua 计数）
@@ -350,7 +402,7 @@ offer-scout/
 ├── api/client.ts        统一接口封装（带凭证、401 处理、SSE 解析）
 ├── stores/session.ts    登录态（token + 当前用户）
 ├── router/index.ts      路由表 + 登录守卫
-├── views/               对话 / 知识库问答 / 作战规划 / 会话档案 / 登录
+├── views/               对话 / 知识库问答 / 作战规划 / 会话档案 / 简历诊断 / 登录
 └── components/          左栏、消息卡、输入框
 ```
 
