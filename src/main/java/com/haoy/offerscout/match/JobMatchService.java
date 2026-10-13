@@ -2,6 +2,7 @@ package com.haoy.offerscout.match;
 
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.common.BusinessException;
+import com.haoy.offerscout.common.StructuredOutputRetry;
 import com.haoy.offerscout.resume.ResumeParser;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -77,22 +78,34 @@ public class JobMatchService {
     }
 
     private JobMatch match(String resumeText, String jdText) {
-        try {
-            JobMatch result = chatClient.prompt()
-                    .system(buildSystemPrompt())
-                    .user(buildUserPrompt(resumeText, jdText))
-                    .call()
-                    .entity(JobMatch.class);
-            log.info("岗位匹配完成：匹配度 {}，命中 {} 条，差距 {} 条",
-                    result.overallScore(),
-                    result.strengths() == null ? 0 : result.strengths().size(),
-                    result.gaps() == null ? 0 : result.gaps().size());
-            return result;
-        } catch (Exception e) {
-            log.error("岗位匹配结构化输出失败（模型可能未按 JSON 格式返回）", e);
-            throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR,
-                    "匹配服务暂时不可用，请稍后重试。");
-        }
+        JobMatch result = StructuredOutputRetry.call(
+                "岗位匹配",
+                () -> chatClient.prompt()
+                        .system(buildSystemPrompt())
+                        .user(buildUserPrompt(resumeText, jdText))
+                        .call()
+                        .entity(JobMatch.class),
+                JobMatchService::isUsable);
+
+        log.info("岗位匹配完成：匹配度 {}，命中 {} 条，差距 {} 条",
+                result.overallScore(),
+                result.strengths() == null ? 0 : result.strengths().size(),
+                result.gaps() == null ? 0 : result.gaps().size());
+        return result;
+    }
+
+    /**
+     * 匹配结果完整性校验。
+     * <p>
+     * 这里额外要求 {@code strengths} / {@code gaps} 至少有一个非空：一份"没有命中点也没有差距点"
+     * 的匹配报告没有任何信息量，属于模型没真正干活，应该重试而不是原样返回给用户。
+     */
+    private static boolean isUsable(JobMatch m) {
+        return m.overallScore() >= 0 && m.overallScore() <= 100
+                && m.dimensions() != null && !m.dimensions().isEmpty()
+                && StrUtil.isNotBlank(m.summary())
+                && ((m.strengths() != null && !m.strengths().isEmpty())
+                    || (m.gaps() != null && !m.gaps().isEmpty()));
     }
 
     private String buildSystemPrompt() {

@@ -2,7 +2,17 @@ spring:
   application:
     name: offer-scout
   profiles:
-    active: local
+    # 默认本地开发：加载 application-local.yml（含真实密钥，已 gitignore，不入库）。
+    # CI 用环境变量 SPRING_PROFILES_ACTIVE=ci 覆盖，改加载 src/test/resources/application-ci.yml，
+    # 里面只有 localhost 的 MySQL/Redis 与占位密钥 —— 流水线因此不需要任何真实 secret。
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  servlet:
+    multipart:
+      # 简历上传的体积上限。必须显式配：Spring Boot 默认 max-file-size 只有 1MB，
+      # 而真实简历 PDF 常在 1~2MB —— 不配的话用户传个正常简历就会失败，
+      # 且抛出的 MaxUploadSizeExceededException 默认没人接，前端只会看到框架的报错结构。
+      max-file-size: 10MB
+      max-request-size: 12MB
 
 server:
   port: 8124
@@ -27,7 +37,6 @@ knife4j:
   setting:
     language: zh_cn
 
-# 打开 Spring AI 的调试日志，能看到发给大模型的完整提示词
-logging:
-  level:
-    org.springframework.ai: DEBUG
+# 说明：Spring AI 的 DEBUG 日志（能看到发给大模型的完整提示词）**刻意不放在这里**，
+# 而是放在 application-local.yml —— 因为它会把用户简历正文、JD 原文、面试对话全文
+# 一并写进日志，属于隐私泄漏 + 日志噪音，只应在本地调试时开。

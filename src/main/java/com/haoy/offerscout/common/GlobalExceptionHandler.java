@@ -1,10 +1,13 @@
 package com.haoy.offerscout.common;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -25,10 +28,38 @@ import java.util.Map;
 @Slf4j
 public class GlobalExceptionHandler {
 
+    /**
+     * 上传体积上限，直接读 multipart 的配置值。
+     * <p>
+     * 不写死"10MB"是为了让提示文案和真正的限制**只有一个来源** —— 哪天把限制改成 20MB，
+     * 用户看到的报错会自动跟着变，不会出现"提示说 10MB、实际放到 20MB"这种对不上的情况。
+     */
+    private final String maxFileSize;
+
+    public GlobalExceptionHandler(@Value("${spring.servlet.multipart.max-file-size:1MB}") String maxFileSize) {
+        this.maxFileSize = maxFileSize;
+    }
+
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<Map<String, Object>> handleBusiness(BusinessException e) {
         log.warn("业务异常：{} - {}", e.getStatus(), e.getMessage());
         return ResponseEntity.status(e.getStatus()).body(body(e.getStatus().value(), e.getMessage()));
+    }
+
+    /**
+     * 上传体积超限。
+     * <p>
+     * Spring Boot 的默认处理是不接这个异常的，于是超限会掉进框架默认错误页 ——
+     * 用户看到的是一段英文状态信息，完全不知道"是文件太大"。这里翻译成 413 + 明确指引。
+     * <p>
+     * 用 413（Payload Too Large）而不是 400：这是语义更准确的状态码，
+     * 前端也能据此和"参数填错"区分开（虽然本项目前端只是把 message 透出来）。
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleMaxUploadSize(MaxUploadSizeExceededException e) {
+        log.warn("上传体积超限（上限 {}）：{}", maxFileSize, e.getMessage());
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(body(413, "文件过大，请压缩到 " + maxFileSize + " 以内再上传。"));
     }
 
     /**

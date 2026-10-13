@@ -2,6 +2,7 @@ package com.haoy.offerscout.resume;
 
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.common.BusinessException;
+import com.haoy.offerscout.common.StructuredOutputRetry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -112,22 +113,32 @@ public class ResumeService {
         String systemPrompt = buildSystemPrompt(reference);
         String userPrompt = buildUserPrompt(resumeText, targetJob);
 
-        try {
-            ResumeDiagnosis diagnosis = chatClient.prompt()
-                    .system(systemPrompt)
-                    .user(userPrompt)
-                    .call()
-                    .entity(ResumeDiagnosis.class);
-            log.info("简历诊断完成：总分 {}，建议 {} 条", diagnosis.overallScore(),
-                    diagnosis.suggestions() == null ? 0 : diagnosis.suggestions().size());
-            return diagnosis;
-        } catch (Exception e) {
-            // 结构化输出失败最常见的原因是模型没按 schema 吐 JSON。
-            // 这里不尝试裸奔返回 —— 把错误抛给全局异常处理，前端能看到明确失败而不是一张空报告。
-            log.error("简历诊断结构化输出失败（模型可能未按 JSON 格式返回）", e);
-            throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR,
-                    "诊断服务暂时不可用，请稍后重试。");
-        }
+        // 结构化输出交给统一的兜底重试（模型偶尔会多包围栏 / 吐错类型 / 漏字段）。
+        // 原来这里是一层 try-catch 直接 500；现在做成"连续 3 次都拿不到可用结果才算失败"。
+        ResumeDiagnosis diagnosis = StructuredOutputRetry.call(
+                "简历诊断",
+                () -> chatClient.prompt()
+                        .system(systemPrompt)
+                        .user(userPrompt)
+                        .call()
+                        .entity(ResumeDiagnosis.class),
+                ResumeService::isUsable);
+
+        log.info("简历诊断完成：总分 {}，建议 {} 条", diagnosis.overallScore(),
+                diagnosis.suggestions() == null ? 0 : diagnosis.suggestions().size());
+        return diagnosis;
+    }
+
+    /**
+     * 诊断结果完整性校验。
+     * <p>
+     * 「能反序列化」不等于「内容可用」—— 字段全空的对象照样能通过 Jackson，
+     * 返回给前端只会渲染出一张空白报告，这种静默成功比报错更难排查。所以不满足就触发重试。
+     */
+    private static boolean isUsable(ResumeDiagnosis d) {
+        return d.overallScore() >= 0 && d.overallScore() <= 100
+                && d.dimensions() != null && !d.dimensions().isEmpty()
+                && StrUtil.isNotBlank(d.summary());
     }
 
     private String buildSystemPrompt(String reference) {

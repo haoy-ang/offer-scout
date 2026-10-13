@@ -2,6 +2,7 @@ package com.haoy.offerscout.interview;
 
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.common.BusinessException;
+import com.haoy.offerscout.common.StructuredOutputRetry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
@@ -127,19 +128,34 @@ public class InterviewService {
         }
 
         String transcript = buildTranscript(history);
-        try {
-            InterviewReport report = reviewClient.prompt()
-                    .system(buildReviewPrompt(role, type))
-                    .user("以下是这场面试的完整记录，请据此复盘：\n\n" + transcript)
-                    .call()
-                    .entity(InterviewReport.class);
-            log.info("面试复盘完成：session={} 总分={} 结论={}", sessionId,
-                    report.overallScore(), report.verdict());
-            return report;
-        } catch (Exception e) {
-            log.error("面试复盘结构化输出失败（模型可能未按 JSON 格式返回）", e);
-            throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR, "复盘生成失败，请稍后重试。");
-        }
+
+        // 复盘同样是结构化输出，走统一兜底重试。
+        // 注意重试的输入始终是同一份记录 —— 复盘基于已定稿的对话，不会因为重试而改变事实。
+        InterviewReport report = StructuredOutputRetry.call(
+                "面试复盘",
+                () -> reviewClient.prompt()
+                        .system(buildReviewPrompt(role, type))
+                        .user("以下是这场面试的完整记录，请据此复盘：\n\n" + transcript)
+                        .call()
+                        .entity(InterviewReport.class),
+                InterviewService::isUsable);
+
+        log.info("面试复盘完成：session={} 总分={} 结论={}", sessionId,
+                report.overallScore(), report.verdict());
+        return report;
+    }
+
+    /**
+     * 复盘结果完整性校验。
+     * <p>
+     * {@code verdict} 是复盘最核心的产出（这场到底过没过），为空等于没给结论；
+     * {@code dimensions} 为空则前端画不出维度条。任一缺失都视为本次结果不可用。
+     */
+    private static boolean isUsable(InterviewReport r) {
+        return r.overallScore() >= 0 && r.overallScore() <= 100
+                && r.dimensions() != null && !r.dimensions().isEmpty()
+                && StrUtil.isNotBlank(r.verdict())
+                && StrUtil.isNotBlank(r.summary());
     }
 
     /**
