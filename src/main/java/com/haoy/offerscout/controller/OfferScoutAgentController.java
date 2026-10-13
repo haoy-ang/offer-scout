@@ -2,6 +2,7 @@ package com.haoy.offerscout.controller;
 
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.agent.OfferScoutAgent;
+import com.haoy.offerscout.auth.RequireLogin;
 import com.haoy.offerscout.ratelimit.RateLimit;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -25,9 +26,13 @@ import java.util.concurrent.CompletableFuture;
  * 而 Agent 一个任务要跑 3~8 步，每步都是一次完整的 LLM 请求（还带工具调用往返）。
  * 也就是说一次 Agent 调用的成本约等于十次普通对话 —— 限流额度必须按调用成本来定，
  * 而不是所有接口一刀切。
+ * <p>
+ * 另外打了 {@code @RequireLogin}：这个接口不仅是全场最贵的，而且是**唯一一个会把结果
+ * 跑在异步线程上的**。匿名用户花别人的 token 跑 Agent，属于典型的资源滥用入口。
  */
 @RestController
 @RequestMapping("/ai/agent")
+@RequireLogin
 @Slf4j
 public class OfferScoutAgentController {
 
@@ -58,6 +63,12 @@ public class OfferScoutAgentController {
     /**
      * 流式执行：先把每一步的「思考 / 工具调用」推给前端，最后推最终结论。
      * 这样用户不用干等几十秒，能看到 Agent 正在干什么。
+     * <p>
+     * <b>鉴权必须发生在 {@code CompletableFuture.runAsync} 之前</b>：
+     * 拦截器和 {@code UserContext} 都基于 ThreadLocal，
+     * 一旦进了异步线程，那里读不到任何身份信息。
+     * 好在 {@code @RequireLogin} 是在 {@code preHandle} 阶段就拦下未登录请求的，
+     * 而 preHandle 跑在请求线程上 —— 校验已经完成，异步里不需要再判一次。
      */
     @GetMapping(value = "/run/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @RateLimit(limit = 3, windowSeconds = 60, message = "Agent 任务比较耗资源，每分钟最多发起 3 次，请稍后再试。")

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
 import java.util.Optional;
@@ -38,6 +39,9 @@ class ConversationPersistenceTest {
     /** 埋一个暗号，用来验证内容而不仅仅是条数 */
     private static final String SECRET = "紫水晶七号";
 
+    /** 会话归属：鉴权上线后，写会话必须带上用户 */
+    private static final long USER_ID = 1L;
+
     @Resource
     private JobApp jobApp;
 
@@ -47,14 +51,22 @@ class ConversationPersistenceTest {
     @Resource
     private ConversationService conversationService;
 
+    @Resource
+    private JdbcTemplate jdbcTemplate;
+
     @Test
     @Order(1)
     void step1WriteTurn() {
-        // 先清掉上次运行的残留，让本测试可以反复跑
-        conversationService.delete(CHAT_ID);
+        // 先清掉上次运行的残留，让本测试可以反复跑。
+        // 这里刻意用原始 SQL 而不是 conversationService.delete(CHAT_ID, USER_ID)：
+        // 业务方法现在带归属校验，而"鉴权上线之前"这条固定 ID 的记录 user_id 是 NULL，
+        // 走业务方法会判定为"别人的会话"而拒绝删除 —— 清理这种历史遗留数据，
+        // 正该用 SQL 直连数据库，而不是绕过校验（也绝不能为了测试去掉校验）。
+        jdbcTemplate.update("DELETE FROM conversation WHERE id = ?", CHAT_ID);
+        chatMemory.clear(CHAT_ID);
 
         String reply = jobApp.doChat(
-                "请记住这个暗号：" + SECRET + "。这一轮只回复两个字：收到", CHAT_ID);
+                "请记住这个暗号：" + SECRET + "。这一轮只回复两个字：收到", CHAT_ID, USER_ID);
 
         System.out.println("=== 第 1 步（写入）===");
         System.out.println("AI 回复: " + reply);
@@ -76,7 +88,7 @@ class ConversationPersistenceTest {
                 messages.stream().anyMatch(m -> m.getText() != null && m.getText().contains(SECRET)),
                 "应该能读到上一轮写入的暗号内容：" + SECRET);
 
-        Optional<Conversation> conversation = conversationService.list().stream()
+        Optional<Conversation> conversation = conversationService.list(USER_ID).stream()
                 .filter(c -> CHAT_ID.equals(c.id()))
                 .findFirst();
         Assertions.assertTrue(conversation.isPresent(), "会话元数据也应该还在");

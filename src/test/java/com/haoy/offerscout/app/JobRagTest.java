@@ -15,6 +15,9 @@ import java.util.UUID;
 @SpringBootTest
 class JobRagTest {
 
+    /** 固定测试用户 ID（conversation.user_id 无外键约束，直接约定一个即可） */
+    private static final long TEST_USER = 1L;
+
     @Resource
     private JobApp jobApp;
 
@@ -23,7 +26,7 @@ class JobRagTest {
         String chatId = UUID.randomUUID().toString();
 
         String answer = jobApp.doChatWithRag(
-                "面试官问我 MySQL 的 MVCC 是怎么实现的，我该怎么回答？", chatId);
+                "面试官问我 MySQL 的 MVCC 是怎么实现的，我该怎么回答？", chatId, TEST_USER);
 
         Assertions.assertNotNull(answer, "RAG 回复不应该为空");
         System.out.println("=== RAG 回答 ===\n" + answer);
@@ -32,7 +35,7 @@ class JobRagTest {
     @Test
     void testCurrentDateInjected() {
         String answer = jobApp.doChat("现在是哪一年哪个月？只回答年月，不要解释。",
-                UUID.randomUUID().toString());
+                UUID.randomUUID().toString(), TEST_USER);
 
         Assertions.assertNotNull(answer);
         System.out.println("=== 日期检查（应为 2026 年 10 月）===\n" + answer);

@@ -23,6 +23,13 @@ import java.time.LocalDate;
  * <p>
  * 对话记忆不再自己 new，而是注入 {@link ChatMemory} Bean ——
  * 底层的存储实现（内存 / MySQL）由配置决定，应用层不关心。
+ * <p>
+ * <b>关于 {@code userId} 参数为什么层层透传，而不是在方法里读 ThreadLocal：</b>
+ * 当前用户是放在 {@code ThreadLocal} 里的（见 {@code UserContext}），
+ * 而本类的方法会返回 {@link Flux} —— 一旦某个调用点把逻辑挪进
+ * {@code doOnNext} / {@code doOnComplete} 这类回调，线程就换成了 Reactor 的，
+ * 那时 ThreadLocal 里是空的，而且**不会报错，只会静默地把消息写进"无主会话"**。
+ * 让身份作为显式参数出现在签名上，数据依赖一眼可见，也不用担心执行线程是谁。
  */
 @Component
 @Slf4j
@@ -101,10 +108,11 @@ public class JobApp {
      *
      * @param message 用户输入
      * @param chatId  会话 ID，同一个 ID 共享上下文
+     * @param userId  当前登录用户；用于新建会话时写入归属，以及校验这个 chatId 是不是他的
      * @return AI 的完整回复
      */
-    public String doChat(String message, String chatId) {
-        conversationService.ensureExists(chatId, message);
+    public String doChat(String message, String chatId, long userId) {
+        conversationService.ensureExists(chatId, message, userId);
 
         ChatResponse response = chatClient.prompt()
                 .user(message)
@@ -115,7 +123,7 @@ public class JobApp {
         String content = (response == null || response.getResult() == null)
                 ? null
                 : response.getResult().getOutput().getText();
-        log.info("chatId={} 用户: {} | 回复: {}", chatId, message, content);
+        log.info("chatId={} 用户{}: {} | 回复: {}", chatId, userId, message, content);
 
         conversationService.refreshMessageCount(chatId);
         return content;
@@ -126,10 +134,14 @@ public class JobApp {
      *
      * @param message 用户输入
      * @param chatId  会话 ID
+     * @param userId  当前登录用户
      * @return 逐段返回的文本流
      */
-    public Flux<String> doChatByStream(String message, String chatId) {
-        conversationService.ensureExists(chatId, message);
+    public Flux<String> doChatByStream(String message, String chatId, long userId) {
+        // 这一步在**请求线程**上同步执行（方法体先跑完，才把 Flux 交给框架），
+        // 所以越权的 403 会正常抛出、被全局异常处理器接住，前端拿到的是一次干净的报错，
+        // 而不是一条"流里突然冒出个错误"的 SSE。
+        conversationService.ensureExists(chatId, message, userId);
 
         return chatClient.prompt()
                 .user(message)
@@ -137,6 +149,7 @@ public class JobApp {
                 .stream()
                 .content()
                 // 流是懒执行的：必须等它真正跑完，消息才写入记忆，这时回读条数才有意义
+                // 注意这里跑在 Reactor 线程上，所以只用 chatId，不碰 UserContext
                 .doOnComplete(() -> conversationService.refreshMessageCount(chatId));
     }
 
@@ -148,10 +161,11 @@ public class JobApp {
      *
      * @param message 用户输入
      * @param chatId  会话 ID
+     * @param userId  当前登录用户
      * @return AI 的完整回复
      */
-    public String doChatWithRag(String message, String chatId) {
-        conversationService.ensureExists(chatId, message);
+    public String doChatWithRag(String message, String chatId, long userId) {
+        conversationService.ensureExists(chatId, message, userId);
 
         ChatResponse response = chatClient.prompt()
                 .user(message)
@@ -164,7 +178,7 @@ public class JobApp {
         String content = (response == null || response.getResult() == null)
                 ? null
                 : response.getResult().getOutput().getText();
-        log.info("chatId={} [RAG] 用户: {} | 回复: {}", chatId, message, content);
+        log.info("chatId={} [RAG] 用户{}: {} | 回复: {}", chatId, userId, message, content);
 
         conversationService.refreshMessageCount(chatId);
         return content;
@@ -181,8 +195,8 @@ public class JobApp {
      * 只有同步版的话，前端要干等十几秒才看到整段回答；检索本身很快，
      * 慢的是模型生成，而这部分完全可以边生成边推送。
      */
-    public Flux<String> doChatWithRagByStream(String message, String chatId) {
-        conversationService.ensureExists(chatId, message);
+    public Flux<String> doChatWithRagByStream(String message, String chatId, long userId) {
+        conversationService.ensureExists(chatId, message, userId);
 
         return chatClient.prompt()
                 .user(message)

@@ -26,17 +26,53 @@ CREATE TABLE IF NOT EXISTS SPRING_AI_CHAT_MEMORY
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4 COMMENT ='Spring AI 对话记忆（由框架读写）';
 
+-- 用户表
+-- 为什么叫 app_user 而不是 user？
+--   MySQL 里 user 虽然不算保留字，但 mysql.user 是系统表，写 SQL 和排查时容易混；
+--   换个名字能省掉一堆反引号，也更明确"这是本应用的业务用户"。
+-- 为什么密码列留 100 字？
+--   BCrypt 密文固定 60 字符，但预留一点空间，将来换 Argon2（密文更长）不用改表结构。
+CREATE TABLE IF NOT EXISTS app_user
+(
+    id         BIGINT       NOT NULL AUTO_INCREMENT COMMENT '用户 ID，JWT 的 subject',
+    username   VARCHAR(64)  NOT NULL COMMENT '登录名',
+    password   VARCHAR(100) NOT NULL COMMENT 'BCrypt 密文，绝不存明文',
+    nickname   VARCHAR(64)           DEFAULT NULL COMMENT '显示名',
+    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_username (username)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4 COMMENT ='业务用户';
+
 -- 会话元数据表
 -- 为什么消息正文不存这里？因为消息是框架（Spring AI）的领域模型，
 -- 交给框架自己的仓库管理更稳；而「会话列表」是产品需求，框架不管，得自己建。
 CREATE TABLE IF NOT EXISTS conversation
 (
     id            VARCHAR(64)  NOT NULL COMMENT '会话 ID，与 SPRING_AI_CHAT_MEMORY.conversation_id 对应',
+    user_id       BIGINT                DEFAULT NULL COMMENT '归属用户；NULL 表示鉴权上线前遗留的无主会话',
     title         VARCHAR(128) NOT NULL DEFAULT '新会话' COMMENT '会话标题，取首条用户消息前 30 字',
     message_count INT          NOT NULL DEFAULT 0 COMMENT '当前记忆窗口内的消息条数',
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后活跃时间',
     PRIMARY KEY (id),
-    KEY idx_updated_at (updated_at)
+    -- 会话列表是按用户查的，所以索引带上 user_id；updated_at 放后面用于排序
+    KEY idx_user_updated (user_id, updated_at)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4 COMMENT ='会话元数据';
+
+-- -------------------------------------------------------------
+-- 关于「给已有表加列」这件事
+--
+-- 上面两个 CREATE TABLE 都带 IF NOT EXISTS，所以**只对全新的库有效**：
+-- 老库上 conversation 表已经存在，IF NOT EXISTS 不会补上后来新增的 user_id 列。
+--
+-- 而 MySQL 8 **没有** `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`（那是 MariaDB 的扩展），
+-- 所以这件事没法在纯 SQL 脚本里优雅地做成幂等。两条常见出路：
+--   ① 引入专门的迁移工具（Flyway / Liquibase）—— 正式项目的正解，本项目暂不引入；
+--   ② 在应用启动时用一段 Java 代码查 information_schema 再决定要不要 ALTER。
+-- 本项目用 ②，见 config/SchemaMigrator。
+--
+-- 顺带一条经验：真上生产时，DDL 和发版要解耦 ——
+-- 先单独执行 DDL，确认无锁表风险，再发应用代码。让应用启动时自动改表结构是很危险的。
+-- -------------------------------------------------------------
