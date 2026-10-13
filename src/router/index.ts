@@ -48,6 +48,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/ResumeView.vue'),
     meta: { no: '05', label: '简历诊断', hint: '上传简历，AI 逐项打分并给出改法' },
   },
+  {
+    path: '/match',
+    name: 'match',
+    component: () => import('@/views/JobMatchView.vue'),
+    meta: { no: '06', label: '岗位匹配', hint: '简历对照 JD，算出离这个岗位差多远' },
+  },
   { path: '/:pathMatch(.*)*', redirect: '/chat' },
 ]
 

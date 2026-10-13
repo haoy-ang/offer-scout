@@ -41,6 +41,16 @@ export interface ResumeDiagnosis {
   suggestions: { priority: 'high' | 'medium' | 'low'; problem: string; fix: string }[]
 }
 
+/** 岗位匹配结果（和后端 JobMatch record 一一对应） */
+export interface JobMatch {
+  overallScore: number
+  summary: string
+  strengths: { requirement: string; detail: string }[]
+  gaps: { requirement: string; detail: string }[]
+  dimensions: { name: string; score: number; comment: string }[]
+  suggestions: { priority: 'high' | 'medium' | 'low'; problem: string; fix: string }[]
+}
+
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'DELETE'
   /** 请求体（会被 JSON 序列化）。有值时自动带上 Content-Type */
@@ -322,4 +332,33 @@ export async function analyzeResume(input: {
     throw new Error(`请求失败(${res.status})：${await readError(res)}`)
   }
   return (await res.json()) as ResumeDiagnosis
+}
+
+/* ---------------- 岗位匹配 ---------------- */
+
+/**
+ * 上传简历（PDF 文件或粘贴文本）+ 岗位 JD，拿到结构化匹配报告。
+ * 同样走 multipart/form-data，理由同 {@link analyzeResume}。
+ */
+export async function analyzeMatch(input: {
+  file?: File | null
+  text?: string
+  jd: string
+}): Promise<JobMatch> {
+  const form = new FormData()
+  if (input.file) form.append('file', input.file)
+  if (input.text) form.append('text', input.text)
+  form.append('jd', input.jd)
+
+  const res = await fetch(`${BASE}/ai/match/analyze`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  })
+
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized()
+    throw new Error(`请求失败(${res.status})：${await readError(res)}`)
+  }
+  return (await res.json()) as JobMatch
 }
