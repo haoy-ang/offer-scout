@@ -21,7 +21,7 @@
 | 检索缓存 | 知识库检索结果按 query 缓存，省掉重复的 Embedding 调用 | ✅ 已实现 |
 | 登录鉴权 | JWT 无状态登录 + BCrypt 密码哈希 + 会话归属到用户（含越权防护） | ✅ 已实现 |
 | 简历诊断 | 上传 PDF 简历，解析后按目标岗位给出评分与逐条修改建议 | ✅ 已实现 |
-| 岗位匹配 | 自主检索岗位要求，与简历做对比，输出匹配度报告 | ⬜ 规划中 |
+| 岗位匹配 | 简历对照 JD，算出「离这个岗位差多远」并逐条对出命中与差距 | ✅ 已实现 |
 | 模拟面试 | 扮演技术面试官 / HR，多轮追问并给出复盘 | ⬜ 规划中 |
 
 ## 技术栈
@@ -67,6 +67,7 @@
 | `GET /api/ai/conversation/{id}/messages` | 某个会话的聊天记录（仅限本人） | 是 | 不限 |
 | `DELETE /api/ai/conversation/{id}` | 删除会话（元数据与消息一起清，仅限本人） | 是 | 不限 |
 | `POST /api/ai/resume/analyze` | 简历诊断（`multipart/form-data`，传 `file` 或 `text`，可选 `targetJob`） | 是 | 5/min |
+| `POST /api/ai/match/analyze` | 岗位匹配（`multipart/form-data`，简历 `file`/`text` + 必填 `jd`） | 是 | 5/min |
 
 需登录的接口统一用请求头 `Authorization: Bearer <token>` 携带凭证；
 未携带或凭证失效时返回 `401` + `{"code":401,"message":"请先登录"}`。
@@ -293,6 +294,18 @@ BCrypt 内置可调工作因子（慢）+ 自带盐（免疫彩虹表），校�
    而不是返回一份空诊断。接口同时接受「粘贴文本」作为这条路的兜底。
 5. **检索失败不阻断诊断。** 知识库召回失败时降级为"按通用简历标准诊断"，而不是整个接口 500。
 
+## 岗位匹配
+
+拿一份简历对照一个岗位 JD，算出「离这个岗位差多远」。链路和简历诊断同构（复用 `ResumeParser` 解析简历），
+区别在两点：
+
+1. **不检索知识库**。诊断需要「一份好简历长什么样」这个外部标准，所以去召回写法资料；
+   匹配的标准就是 **JD 本身**（它要什么技能、什么经验，白纸黑字写着），直接逐条对照即可，
+   省一次 embedding 调用。
+2. **输出多了「命中点 / 差距点」**（`strengths` / `gaps`）。这才是匹配的核心价值：
+   把 JD 里的每一条要求，和你简历里「有 / 没有」的证据一一对出来，而不是只给一个总分。
+   差距点尤其要写透「缺了它对这个岗位意味着什么」，而不是一句"缺这个技能"。
+
 ## 踩坑记录
 
 ### 1. yml 缩进：顶级键插错位置，子键会静默"换爹"
@@ -376,6 +389,7 @@ offer-scout/
 │   ├── auth/                        JWT 签发校验、拦截器、登出黑名单、UserContext
 │   ├── user/                        用户注册登录与仓储
 │   ├── resume/                      简历 PDF 解析 + 结构化诊断（ResumeParser/ResumeService/ResumeDiagnosis）
+│   ├── match/                       岗位匹配（JobMatchService/JobMatch，复用 resume.ResumeParser）
 │   ├── common/                      业务异常与全局异常处理
 │   ├── cache/                       Redis 缓存封装
 │   ├── ratelimit/                   接口限流（注解 + 拦截器 + Lua 计数）
@@ -402,7 +416,7 @@ offer-scout/
 ├── api/client.ts        统一接口封装（带凭证、401 处理、SSE 解析）
 ├── stores/session.ts    登录态（token + 当前用户）
 ├── router/index.ts      路由表 + 登录守卫
-├── views/               对话 / 知识库问答 / 作战规划 / 会话档案 / 简历诊断 / 登录
+├── views/               对话 / 知识库问答 / 作战规划 / 会话档案 / 简历诊断 / 岗位匹配 / 登录
 └── components/          左栏、消息卡、输入框
 ```
 
