@@ -46,6 +46,16 @@ public class JobController {
     }
 
     /**
+     * 带知识库（RAG）的对话：先检索本地资料，再基于资料回答。
+     * 问面试题、简历写法这类有标准答案的问题时用这个接口。
+     */
+    @GetMapping("/chat/rag")
+    public String chatWithRag(@RequestParam String message,
+                              @RequestParam(required = false) String chatId) {
+        return jobApp.doChatWithRag(message, resolveChatId(chatId));
+    }
+
+    /**
      * 没传会话 ID 就新建一个，保证每次调用都有独立上下文。
      */
     private String resolveChatId(String chatId) {

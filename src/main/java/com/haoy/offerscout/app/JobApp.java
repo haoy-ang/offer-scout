@@ -3,13 +3,18 @@ package com.haoy.offerscout.app;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
+import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
+
+import java.time.LocalDate;
 
 /**
  * 求职助手应用 —— 把大模型包装成「Offer 侦察兵」。
@@ -22,6 +27,13 @@ import reactor.core.publisher.Flux;
 public class JobApp {
 
     private final ChatClient chatClient;
+
+    /**
+     * RAG Advisor：检索增强。
+     * 它会在每次请求前拿用户问题去向量库检索相似片段，把命中的资料拼进提示词，
+     * 这样模型回答就是「基于你的知识库」而不是「凭记忆瞎编」。
+     */
+    private final QuestionAnswerAdvisor questionAnswerAdvisor;
 
     /**
      * 系统提示词：决定这个 AI 是什么角色、怎么工作。
@@ -49,15 +61,28 @@ public class JobApp {
             - 不编造用户没有的经历，信息不确定时向用户确认。
             """;
 
-    public JobApp(ChatModel dashscopeChatModel) {
+    public JobApp(ChatModel dashscopeChatModel, SimpleVectorStore jobVectorStore) {
         // 基于内存的对话记忆：保留最近 20 条消息，超出后自动丢弃最早的
         MessageWindowChatMemory chatMemory = MessageWindowChatMemory.builder()
                 .chatMemoryRepository(new InMemoryChatMemoryRepository())
                 .maxMessages(20)
                 .build();
 
+        // 检索配置：取相似度最高的 4 段；similarityThreshold 为 0 表示不做阈值过滤（先保证能召回）
+        this.questionAnswerAdvisor = QuestionAnswerAdvisor.builder(jobVectorStore)
+                .searchRequest(SearchRequest.builder()
+                        .topK(4)
+                        .similarityThreshold(0.0)
+                        .build())
+                .build();
+
+        // 把当天日期写进系统提示词：模型诞生于训练数据截止日，不告诉它今天几号它会瞎猜
+        String systemPrompt = SYSTEM_PROMPT
+                + "\n## 时间\n今天的日期是 " + LocalDate.now()
+                + "。遇到今年、现在、最近这类相对时间，以这个日期为准，不要凭训练数据推断。\n";
+
         this.chatClient = ChatClient.builder(dashscopeChatModel)
-                .defaultSystem(SYSTEM_PROMPT)
+                .defaultSystem(systemPrompt)
                 // 对话记忆靠 Advisor 实现：它会在每次请求前后自动读写历史消息
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                 .build();
@@ -97,5 +122,31 @@ public class JobApp {
                 .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, chatId))
                 .stream()
                 .content();
+    }
+
+    /**
+     * 带知识库的同步对话（RAG）。
+     * <p>
+     * 和 {@link #doChat} 的唯一区别是额外挂载了 {@code QuestionAnswerAdvisor}：
+     * 它会先用向量检索从知识库里捞出相关片段，再让模型基于这些片段作答。
+     *
+     * @param message 用户输入
+     * @param chatId  会话 ID
+     * @return AI 的完整回复
+     */
+    public String doChatWithRag(String message, String chatId) {
+        ChatResponse response = chatClient.prompt()
+                .user(message)
+                .advisors(spec -> spec
+                        .advisors(questionAnswerAdvisor)
+                        .param(ChatMemory.CONVERSATION_ID, chatId))
+                .call()
+                .chatResponse();
+
+        String content = (response == null || response.getResult() == null)
+                ? null
+                : response.getResult().getOutput().getText();
+        log.info("chatId={} [RAG] 用户: {} | 回复: {}", chatId, message, content);
+        return content;
     }
 }

@@ -45,17 +45,42 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!-- 参数校验（@Valid / @NotBlank）：不加它启动时会报 NoProviderFoundException 警告 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
         <!-- 阿里云百炼 DashScope SDK -->
         <dependency>
             <groupId>com.alibaba</groupId>
             <artifactId>dashscope-sdk-java</artifactId>
             <version>2.19.1</version>
+            <exclusions>
+                <!-- 它自带 slf4j-simple，会和 Spring Boot 的 logback 冲突（启动时刷 "multiple SLF4J providers" 警告） -->
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-simple</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- Spring AI Alibaba：让 Spring AI 对接 DashScope 大模型 -->
         <dependency>
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
+        </dependency>
+
+        <!-- RAG：提供 QuestionAnswerAdvisor（检索增强问答的 Advisor） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-advisors-vector-store</artifactId>
+        </dependency>
+
+        <!-- RAG：读取 Markdown 格式的知识库文档 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-markdown-document-reader</artifactId>
         </dependency>
 
         <!-- 结构化输出：让大模型直接把结果映射成 Java 对象 -->
