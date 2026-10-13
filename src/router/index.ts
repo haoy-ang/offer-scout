@@ -54,6 +54,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/JobMatchView.vue'),
     meta: { no: '06', label: '岗位匹配', hint: '简历对照 JD，算出离这个岗位差多远' },
   },
+  {
+    path: '/interview',
+    name: 'interview',
+    component: () => import('@/views/InterviewView.vue'),
+    meta: { no: '07', label: '模拟面试', hint: 'AI 面试官多轮追问，结束给结构化复盘' },
+  },
   { path: '/:pathMatch(.*)*', redirect: '/chat' },
 ]
 

@@ -362,3 +362,53 @@ export async function analyzeMatch(input: {
   }
   return (await res.json()) as JobMatch
 }
+
+/* ---------------- 模拟面试 ---------------- */
+
+/** 面试类型：技术面 / HR 面 / 综合面 */
+export type InterviewType = 'tech' | 'hr' | 'mixed'
+
+/** 面试开场返回（和后端 InterviewStart record 一一对应） */
+export interface InterviewStart {
+  sessionId: string
+  opening: string
+}
+
+/** 面试复盘报告（和后端 InterviewReport record 一一对应） */
+export interface InterviewReport {
+  overallScore: number
+  verdict: string
+  summary: string
+  dimensions: { name: string; score: number; comment: string }[]
+  highlights: { question: string; comment: string }[]
+  issues: { question: string; comment: string }[]
+  suggestions: { priority: 'high' | 'medium' | 'low'; problem: string; fix: string }[]
+}
+
+/**
+ * 开始一场面试：后端会生成绑定当前用户的 sessionId，并返回面试官的开场白。
+ * <p>
+ * 参数走 query string（后端用的是 {@code @RequestParam}），不传 body ——
+ * 所以复用通用 {@link request} 即可，注意方法要显式指定 POST。
+ */
+export const startInterview = (role: string, type: InterviewType) =>
+  request<InterviewStart>('/ai/interview/start', { role, type }, { method: 'POST' })
+
+/**
+ * 回答一轮，面试官追问（流式）。
+ * <p>
+ * sessionId 必须来自 {@link startInterview} —— 后端会校验它的前缀是否属于当前用户，
+ * 拿别人的会话 ID 会直接 403。
+ */
+export const interviewStream = (
+  sessionId: string,
+  message: string,
+  role: string,
+  type: InterviewType,
+  onChunk: (chunk: string) => void,
+  signal?: AbortSignal
+) => streamSse('/ai/interview/chat/sse', { sessionId, message, role, type }, onChunk, signal)
+
+/** 结束面试并生成结构化复盘。后端从记忆里取整场记录，前端不需要回放对话。 */
+export const reportInterview = (sessionId: string, role: string, type: InterviewType) =>
+  request<InterviewReport>('/ai/interview/report', { sessionId, role, type }, { method: 'POST' })
