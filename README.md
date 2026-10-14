@@ -49,9 +49,9 @@ CI（`.github/workflows/ci.yml`）会依次跑上面这四步。顺序刻意**�
 
 ## 几个刻意的设计
 
-- **不用 Pinia / Vuex。** 需要跨组件共享的只有「token + 当前用户」两个字段，
-  用 `stores/session.ts`（`ref` + `localStorage`）就够了。约束：**这个文件不 import 任何 api 模块**，
-  否则会和 `api/client.ts` 形成循环依赖。
+- **不用 Pinia / Vuex。** 跨组件共享的状态用 `stores/` 下的模块级 `ref` 导出即可，
+  没必要为几个 `ref` 引入状态库依赖和一堆样板代码。约束：`stores/session.ts` 不 import 任何 api 模块，
+  否则会和 `api/client.ts` 形成循环依赖；退出登录时由 `stores/teardown.ts` 统一清理各 store 状态。
 - **自己写 SSE 解析器，不用浏览器的 `EventSource`。** 它只支持 GET、不能自定义请求头（带不了
   `Authorization`）、并且流正常结束时也会触发 `error`，很难区分「结束」和「失败」。
   改用 `fetch` + `ReadableStream`，既能带请求头，也能通过 `AbortSignal` 实现「停止生成」。
@@ -59,18 +59,18 @@ CI（`.github/workflows/ci.yml`）会依次跑上面这四步。顺序刻意**�
 - **鉴权统一收口在 `api/client.ts`。** 每个调用点不需要记得加 `Authorization` 头，
   401 会被统一处理成「清凭证 + 跳登录页（带 redirect）」。登录/注册接口标了 `anonymous`，
   因为密码错误同样是 401，不能被误判成「会话过期」。
-- **设计方向「侦察简报 / 档案」。** 暖纸底、墨黑字、朱砂强调，质感来自版式、留白和纸纹，
-  而不是渐变与圆角气泡 —— 目的是让它看起来不像又一个通用 AI 聊天框。样式基线在 `styles/base.css`。
+- **设计方向：清爽现代 SaaS。** 浅灰底 + 白卡面、单一强调色（`--brand` 红 + `--teal` 青），
+  靠间距、层级与克制的圆角阴影建立秩序 —— 目的是让它看起来不像又一个通用 AI 聊天框。令牌与组件基线都在 `styles/base.css`。
 
 ## 目录
 
 ```
 src/
-├── api/client.ts        统一接口封装（凭证、401 处理、SSE 解析）
-├── stores/session.ts    登录态（token + 当前用户）
+├── api/client.ts        统一接口封装（凭证、401/429 处理、SSE 解析）
+├── stores/              模块级状态（session / chat / agent / resume / match / interview + cooldown / teardown）
 ├── router/index.ts      路由表 + 登录守卫
-├── styles/base.css      设计系统（CSS 变量 / 纸纹底 / Markdown 排版 / 动效）
+├── styles/base.css      设计系统（CSS 变量 / Markdown 排版 / 动效）
 ├── utils/markdown.ts    markdown-it 渲染 + 复制 + 时间格式化
 ├── components/          SideRail / MessageCard / MessageComposer
-└── views/               8 个页面
+└── views/               7 个视图（6 个功能页 + 登录页）
 ```
