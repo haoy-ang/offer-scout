@@ -3,12 +3,22 @@ name: frontend-ci
 on:
   push:
     branches: [main, master]
+    paths:
+      - 'web/**'
+      - '.github/workflows/frontend-ci.yml'
   pull_request:
+    paths:
+      - 'web/**'
+      - '.github/workflows/frontend-ci.yml'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 本项目是「一个仓库、前后端分目录」的结构，所有 run 步骤都在 web/ 下执行
+    defaults:
+      run:
+        working-directory: web
 
     steps:
       - uses: actions/checkout@v4
@@ -18,6 +28,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+          cache-dependency-path: web/package-lock.json
 
       # npm ci 而不是 npm install：严格按 package-lock.json 安装，
       # 保证 CI 装到的依赖版本和本地完全一致（install 可能会顺手升级）。

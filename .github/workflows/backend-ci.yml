@@ -3,14 +3,24 @@ name: backend-ci
 on:
   push:
     branches: [main, master]
+    paths:
+      - 'server/**'
+      - '.github/workflows/backend-ci.yml'
   pull_request:
+    paths:
+      - 'server/**'
+      - '.github/workflows/backend-ci.yml'
   workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    # 本项目是「一个仓库、前后端分目录」的结构，所有 run 步骤都在 server/ 下执行
+    defaults:
+      run:
+        working-directory: server
 
-    # 测试分三档（见 README「测试」一节）：
+    # 测试分三档（见 server/README.md「测试」一节）：
     #   · 纯 JVM（无标签）  —— 不依赖任何外部服务，任何机器都能跑
     #   · requires-infra    —— 需要 MySQL / Redis，由下面两个 service container 提供
     #   · requires-ai       —— 需要真实大模型 API Key，CI 一律排除（不花额度、不依赖 secret）
@@ -55,6 +65,7 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+          cache-dependency-path: server/pom.xml
 
       - name: Run tests (exclude requires-ai)
         # 用 runner 自带的 Maven，而不是 ./mvnw：wrapper 的 distributionUrl 指向阿里云镜像
