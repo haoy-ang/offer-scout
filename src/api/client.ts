@@ -10,6 +10,7 @@
  */
 
 import { clearSession, getToken, type SessionUser } from '@/stores/session'
+import { noteRateLimit } from '@/stores/cooldown'
 import { router } from '@/router'
 
 const BASE = '/api'
@@ -72,25 +73,64 @@ function buildUrl(path: string, params: Record<string, string | undefined> = {})
   return qs ? `${BASE}${path}?${qs}` : `${BASE}${path}`
 }
 
+/** 从失败响应里解析出的信息 */
+interface ErrorDetail {
+  message: string
+  /** 限流时后端给的等待秒数；没有则为 0 */
+  retryAfter: number
+}
+
 /**
  * 从失败的响应里挖出人话。
  * <p>
- * 后端限流时返回的是 `{"code":429,"message":"请求太频繁了，请 12 秒后再试。"}`，
+ * 后端限流时返回的是 `{"code":429,"message":"请求太频繁了，请 12 秒后再试。","retryAfter":12}`，
  * 如果直接 `res.text()` 塞给用户，界面上就会出现一坨 JSON。
  * 所以先试着按 JSON 解析、取 message 字段；解不出来（比如后端抛了堆栈）就原样返回。
+ * <p>
+ * `retryAfter` 也一并取出来 —— 它要用来在界面上显示倒计时。过去这里只取了 message、
+ * 把这个数字丢掉了，结果用户只知道「请稍后再试」，不知道该等几秒，只能反复盲点。
  */
-async function readError(res: Response): Promise<string> {
+async function readError(res: Response): Promise<ErrorDetail> {
   const raw = await res.text().catch(() => '')
+  let message = res.statusText || `HTTP ${res.status}`
+  let retryAfter = 0
+
   if (raw) {
+    message = raw
     try {
-      const parsed = JSON.parse(raw) as { message?: unknown }
-      if (typeof parsed?.message === 'string' && parsed.message) return parsed.message
+      const parsed = JSON.parse(raw) as { message?: unknown; retryAfter?: unknown }
+      if (typeof parsed?.message === 'string' && parsed.message) message = parsed.message
+      if (typeof parsed?.retryAfter === 'number' && parsed.retryAfter > 0) {
+        retryAfter = parsed.retryAfter
+      }
     } catch {
-      // 不是 JSON，原样返回
+      // 不是 JSON（后端直接抛了堆栈），原样返回
     }
-    return raw
   }
-  return res.statusText || `HTTP ${res.status}`
+
+  // 兜底：响应体里没带就退回头部的 Retry-After（标准头，大小写不敏感）
+  if (!retryAfter) {
+    const header = Number(res.headers.get('retry-after'))
+    if (Number.isFinite(header) && header > 0) retryAfter = header
+  }
+  return { message, retryAfter }
+}
+
+/**
+ * 统一的 HTTP 失败处理：401 送登录页、429 记冷却期，然后把可读的错误抛出去。
+ * <p>
+ * 三件事收在一处，是为了让每个调用点都只写一行 —— 少一处遗漏，
+ * 就少一次"某个接口撞了限流却没进冷却倒计时"的不一致。
+ *
+ * @param anonymous 匿名接口（登录/注册）：401 是"密码错了"，不该当成掉登录态
+ */
+async function throwHttpError(res: Response, anonymous = false): Promise<never> {
+  if (res.status === 401 && !anonymous) handleUnauthorized()
+
+  const detail = await readError(res)
+  if (res.status === 429) noteRateLimit(detail.retryAfter)
+
+  throw new Error(`请求失败(${res.status})：${detail.message}`)
 }
 
 /**
@@ -133,8 +173,7 @@ async function request<T>(
   })
 
   if (!res.ok) {
-    if (res.status === 401 && !options.anonymous) handleUnauthorized()
-    throw new Error(`请求失败(${res.status})：${await readError(res)}`)
+    await throwHttpError(res, options.anonymous)
   }
 
   const contentType = res.headers.get('content-type') ?? ''
@@ -197,8 +236,7 @@ export async function streamSse(
   const res = await fetch(buildUrl(path, params), { headers: authHeaders(), signal })
   if (!res.ok) {
     // 限流、参数错误、未登录等都会走到这里 —— 要把后端的中文提示透出来，而不是只报一个状态码
-    if (res.status === 401) handleUnauthorized()
-    throw new Error(`请求失败(${res.status})：${await readError(res)}`)
+    await throwHttpError(res)
   }
   if (!res.body) {
     throw new Error('流式请求失败：响应没有可读的流')
@@ -319,11 +357,15 @@ export const deleteConversation = (id: string) =>
  * 简历上传是 {@code multipart/form-data}，必须用 FormData 交给 fetch 自己设
  * Content-Type（浏览器会自动带上 boundary 分隔符，手动设反而会漏掉）。
  */
-export async function analyzeResume(input: {
-  file?: File | null
-  text?: string
-  targetJob?: string
-}): Promise<ResumeDiagnosis> {
+export async function analyzeResume(
+  input: {
+    file?: File | null
+    text?: string
+    targetJob?: string
+  },
+  /** 用于「停止」：诊断是最慢的动作之一，必须给用户一个喊停的口子 */
+  signal?: AbortSignal
+): Promise<ResumeDiagnosis> {
   const form = new FormData()
   if (input.file) form.append('file', input.file)
   if (input.text) form.append('text', input.text)
@@ -333,11 +375,11 @@ export async function analyzeResume(input: {
     method: 'POST',
     headers: authHeaders(),
     body: form,
+    signal,
   })
 
   if (!res.ok) {
-    if (res.status === 401) handleUnauthorized()
-    throw new Error(`请求失败(${res.status})：${await readError(res)}`)
+    await throwHttpError(res)
   }
   return (await res.json()) as ResumeDiagnosis
 }
@@ -348,11 +390,15 @@ export async function analyzeResume(input: {
  * 上传简历（PDF 文件或粘贴文本）+ 岗位 JD，拿到结构化匹配报告。
  * 同样走 multipart/form-data，理由同 {@link analyzeResume}。
  */
-export async function analyzeMatch(input: {
-  file?: File | null
-  text?: string
-  jd: string
-}): Promise<JobMatch> {
+export async function analyzeMatch(
+  input: {
+    file?: File | null
+    text?: string
+    jd: string
+  },
+  /** 用于「停止」，理由同 {@link analyzeResume} */
+  signal?: AbortSignal
+): Promise<JobMatch> {
   const form = new FormData()
   if (input.file) form.append('file', input.file)
   if (input.text) form.append('text', input.text)
@@ -362,11 +408,11 @@ export async function analyzeMatch(input: {
     method: 'POST',
     headers: authHeaders(),
     body: form,
+    signal,
   })
 
   if (!res.ok) {
-    if (res.status === 401) handleUnauthorized()
-    throw new Error(`请求失败(${res.status})：${await readError(res)}`)
+    await throwHttpError(res)
   }
   return (await res.json()) as JobMatch
 }
