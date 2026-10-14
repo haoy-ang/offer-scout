@@ -3,6 +3,7 @@ package com.haoy.offerscout.interview;
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.common.BusinessException;
 import com.haoy.offerscout.common.StructuredOutputRetry;
+import com.haoy.offerscout.common.TimeContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
@@ -250,7 +251,10 @@ public class InterviewService {
                 6. 语气专业、简洁，不要过度寒暄，也不要每次都重复「好的，我们继续」。
                 """
                 .replace("{{TYPE}}", typeDesc(type))
-                .replace("{{ROLE}}", targetRole);
+                .replace("{{ROLE}}", targetRole)
+                // 面试官也要知道今天几号：否则它可能问出"你今年大几""现在到哪一步了"时
+                // 拿训练期的年份做背景，甚至点评候选人经历时用错时间线。统一走 TimeContext。
+                + TimeContext.promptSection();
     }
 
     /** 复盘官人设。同样用 replace 避开 % 坑。 */
@@ -277,6 +281,8 @@ public class InterviewService {
                 - summary 一句话说清：这场面试能不能过 + 最该补的一个短板
                 """
                 .replace("{{ROLE}}", targetRole)
-                .replace("{{TYPE}}", typeDesc(type));
+                .replace("{{TYPE}}", typeDesc(type))
+                // 复盘里会判断"以你现在的进度还能补什么"，同样需要真实日期兜底
+                + TimeContext.promptSection();
     }
 }

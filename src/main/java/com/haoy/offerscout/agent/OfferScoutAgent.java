@@ -1,5 +1,6 @@
 package com.haoy.offerscout.agent;
 
+import com.haoy.offerscout.common.TimeContext;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
@@ -14,7 +15,7 @@ import org.springframework.stereotype.Component;
  * <p>
  * <b>作用域必须是 prototype</b>：{@link BaseAgent} 持有可变状态（state / messageList），
  * 单例 Bean 在并发请求下会互相污染。prototype 保证每次请求拿到一个干净实例，
- * 这是一处刻意区别于教程实现的修正。
+ * 因此这里必须显式声明作用域，不能沿用 Spring 默认的单例。
  */
 @Component
 @Scope("prototype")
@@ -27,7 +28,8 @@ public class OfferScoutAgent extends ToolCallAgent {
             必须主动使用工具获取真实信息，不要凭记忆作答：
             1. searchJobKnowledge —— 检索本地求职知识库，内含各互联网公司的后端面经真题、
                岗位 JD 要求、技术简历写法资料。这是你最核心的信息来源。
-            2. getCurrentDateTime —— 获取真实系统时间。凡涉及今年、现在、还剩几个月，必须先调用。
+            2. getCurrentDateTime —— 获取精确到时分秒的系统时间。系统提示末尾已经告知今天的日期，
+               需要精确时间、或想再核对一遍日期时才调用它。
             3. doTerminate —— 任务完成后调用它收尾。
 
             ## 工作方式
@@ -56,7 +58,9 @@ public class OfferScoutAgent extends ToolCallAgent {
     public OfferScoutAgent(ChatModel dashscopeChatModel, ToolCallback[] offerScoutTools) {
         super(offerScoutTools);
         setName("OfferScout");
-        setSystemPrompt(SYSTEM_PROMPT);
+        // 提示词末尾补上「今天几号」：模型的知识停在训练截止日，不告诉它日期，
+        // 它会拿训练期的年份理解"今年/现在/还剩几个月"。口径统一走 TimeContext。
+        setSystemPrompt(SYSTEM_PROMPT + TimeContext.promptSection());
         setNextStepPrompt(NEXT_STEP_PROMPT);
         // 8 步足够完成「检索 → 补充检索 → 产出结论」；再多就是模型在绕圈，纯烧 token
         setMaxSteps(8);

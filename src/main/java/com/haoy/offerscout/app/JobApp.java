@@ -1,6 +1,7 @@
 package com.haoy.offerscout.app;
 
 import com.haoy.offerscout.chat.ConversationService;
+import com.haoy.offerscout.common.TimeContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
@@ -12,8 +13,6 @@ import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
-
-import java.time.LocalDate;
 
 /**
  * 求职助手应用 —— 把大模型包装成「Offer 侦察兵」。
@@ -91,10 +90,9 @@ public class JobApp {
                         .build())
                 .build();
 
-        // 把当天日期写进系统提示词：模型诞生于训练数据截止日，不告诉它今天几号它会瞎猜
-        String systemPrompt = SYSTEM_PROMPT
-                + "\n## 时间\n今天的日期是 " + LocalDate.now()
-                + "。遇到今年、现在、最近这类相对时间，以这个日期为准，不要凭训练数据推断。\n";
+        // 把当天日期写进系统提示词：模型的"知识"停在训练数据截止日，不告诉它今天几号它会瞎猜。
+        // 口径统一由 TimeContext 提供（各页共用，避免有的页漏拼）。
+        String systemPrompt = SYSTEM_PROMPT + TimeContext.promptSection();
 
         this.chatClient = ChatClient.builder(dashscopeChatModel)
                 .defaultSystem(systemPrompt)

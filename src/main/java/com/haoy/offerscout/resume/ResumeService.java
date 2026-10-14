@@ -3,6 +3,7 @@ package com.haoy.offerscout.resume;
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.common.BusinessException;
 import com.haoy.offerscout.common.StructuredOutputRetry;
+import com.haoy.offerscout.common.TimeContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -167,7 +168,10 @@ public class ResumeService {
                 // 注意：这里刻意不用 String.formatted()。提示词里出现了字面 "%"（"性能提升 X%"），
                 // formatted() 会把所有 "%" 当成格式占位符解析，撞上 "%、" 这种非法转换直接抛
                 // UnknownFormatConversionException。用 replace 换一个不会出现在正文里的 token 最稳。
-                .replace("{{REFERENCE}}", reference);
+                .replace("{{REFERENCE}}", reference)
+                // 补上「今天几号」。不加这段，模型会拿训练数据里的年份去理解"今年/现在"——
+                // 实测它会按 2024 年给判断（因为它"以为"现在还是 2024）。口径统一走 TimeContext。
+                + TimeContext.promptSection();
     }
 
     private String buildUserPrompt(String resumeText, String targetJob) {

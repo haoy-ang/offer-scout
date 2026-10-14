@@ -3,6 +3,7 @@ package com.haoy.offerscout.match;
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.common.BusinessException;
 import com.haoy.offerscout.common.StructuredOutputRetry;
+import com.haoy.offerscout.common.TimeContext;
 import com.haoy.offerscout.resume.ResumeParser;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -132,7 +133,10 @@ public class JobMatchService {
 
                 ## 输出约束
                 - 只输出符合 JSON Schema 的结构化结果，不要输出任何额外的解释文字
-                """;
+                """
+                // 补「今天几号」：判断"应届/几届/现在的时间点"必须基于真实日期，
+                // 否则模型会拿训练数据里的年份当"现在"。口径统一走 TimeContext。
+                + TimeContext.promptSection();
     }
 
     private String buildUserPrompt(String resumeText, String jdText) {
