@@ -124,8 +124,18 @@ public class InterviewService {
         requireOwnedSession(sessionId, userId);
 
         List<Message> history = chatMemory.get(sessionId);
-        if (history == null || history.isEmpty()) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST, "这场面试还没有任何对话，无法生成复盘。");
+
+        // 不能用 history.isEmpty() 判断"有没有内容"：
+        // start() 会把开场提示语（USER 身份的 KICKOFF_CUE）和面试官开场白一起写进记忆，
+        // 所以只 start 过、一轮都没答的面试，history 里也躺着 2 条消息。
+        // 用 isEmpty() 判断会把它放行，模型只能拿开场白硬编出一份看着完整的复盘
+        // —— 实测 0 回答也能给出 54 分、4 个维度，甚至点评从未问过的题。
+        // 真正该统计的是"候选人回答了几轮"，所以必须把开场提示语排除掉。
+        long answerCount = history == null ? 0L : history.stream()
+                .filter(m -> m.getMessageType() == MessageType.USER && !isKickoffCue(m))
+                .count();
+        if (answerCount == 0) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "这场面试还没有任何回答，无法生成复盘。");
         }
 
         String transcript = buildTranscript(history);
@@ -176,11 +186,11 @@ public class InterviewService {
     private String buildTranscript(List<Message> history) {
         StringBuilder sb = new StringBuilder();
         for (Message m : history) {
-            String text = m.getText() == null ? "" : m.getText();
             // 开场提示语是 USER 身份发出去的指令，不是候选人的回答，拼记录时跳过
-            if (m.getMessageType() == MessageType.USER && KICKOFF_CUE.equals(text.trim())) {
+            if (isKickoffCue(m)) {
                 continue;
             }
+            String text = m.getText() == null ? "" : m.getText();
             String speaker = switch (m.getMessageType()) {
                 case USER -> "候选人";
                 case ASSISTANT -> "面试官";
@@ -195,6 +205,20 @@ public class InterviewService {
                     + transcript.substring(transcript.length() - MAX_TRANSCRIPT_CHARS);
         }
         return transcript;
+    }
+
+    /**
+     * 这条消息是不是开场的提示语（KICKOFF_CUE）。
+     * <p>
+     * 它不是候选人的回答 —— 拼复盘记录时要跳过、统计回答轮数时也不能算，
+     * 所以判据只留这一处，避免两个地方各写一遍、将来改一处漏一处。
+     */
+    private static boolean isKickoffCue(Message m) {
+        if (m.getMessageType() != MessageType.USER) {
+            return false;
+        }
+        String text = m.getText() == null ? "" : m.getText().trim();
+        return KICKOFF_CUE.equals(text);
     }
 
     private String extractText(ChatResponse response) {
