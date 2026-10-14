@@ -74,6 +74,18 @@ public abstract class BaseAgent {
     private Consumer<String> stepListener;
 
     /**
+     * 外部中止标志。
+     * <p>
+     * 最典型的触发场景：流式接口的前端断开了连接（切页、关标签、点停止）。
+     * 这时结果已经没有接收方，但 Agent 的循环还不知道，会继续一步步烧 token。
+     * 由调用方在推流失败时调 {@link #abort()}，主循环会在**步与步之间**检查它并停下 ——
+     * 只能做到步骤粒度，因为单步里的那次模型调用是阻塞的、无法中断。
+     * <p>
+     * {@code volatile}：abort() 可能在推送线程上被调用，而读它的是执行线程。
+     */
+    private volatile boolean aborted;
+
+    /**
      * 执行代理。
      *
      * @param userPrompt 用户任务描述
@@ -91,7 +103,7 @@ public abstract class BaseAgent {
         messageList.add(new UserMessage(userPrompt));
 
         try {
-            for (int i = 0; i < maxSteps && state == AgentState.RUNNING; i++) {
+            for (int i = 0; i < maxSteps && state == AgentState.RUNNING && !aborted; i++) {
                 currentStep = i + 1;
                 log.info("[{}] 执行第 {}/{} 步", name, currentStep, maxSteps);
 
@@ -103,7 +115,11 @@ public abstract class BaseAgent {
                 }
             }
 
-            if (state == AgentState.RUNNING) {
+            if (aborted) {
+                // 结果已经没人接收了（前端断开），继续跑只是白烧 token —— 就地收工
+                log.info("[{}] 收到中止信号，在第 {} 步后停止", name, currentStep);
+                state = AgentState.FINISHED;
+            } else if (state == AgentState.RUNNING) {
                 // 跑满 maxSteps 还没结束，兜底收尾，避免状态卡在 RUNNING
                 log.warn("[{}] 达到最大步数 {}，强制结束", name, maxSteps);
                 state = AgentState.FINISHED;
@@ -146,6 +162,16 @@ public abstract class BaseAgent {
     /** 资源清理钩子，子类可重写 */
     protected void cleanup() {
         // 默认什么都不做
+    }
+
+    /**
+     * 请求中止执行。
+     * <p>
+     * 非抢占式：只是置一个标志，主循环在下一步开始前检查它。所以从调用到真正停下，
+     * 最长还要等「当前这一步」跑完（一次模型调用 + 可能的工具执行）。
+     */
+    public void abort() {
+        this.aborted = true;
     }
 
     /** 供接口层拿到完整的步骤日志 */

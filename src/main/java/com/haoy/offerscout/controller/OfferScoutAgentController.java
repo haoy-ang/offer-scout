@@ -76,12 +76,21 @@ public class OfferScoutAgentController {
         SseEmitter emitter = new SseEmitter(300_000L);
         OfferScoutAgent agent = agentProvider.getObject();
 
+        // 超时 / 出错都等于"这次结果没人要了"：顺手叫停 Agent，别让它在后台白烧 token
+        emitter.onTimeout(agent::abort);
+        emitter.onError(e -> {
+            log.debug("SSE 连接出错，客户端可能已断开", e);
+            agent.abort();
+        });
+
         agent.setStepListener(step -> {
             try {
                 emitter.send(step);
             } catch (IOException e) {
-                // 前端断开是常态，不必当成错误往上抛
-                log.debug("SSE 推送失败，客户端可能已断开", e);
+                // 前端断开是常态（切页 / 关标签 / 点停止），不是故障 —— 但必须让 Agent 停下来，
+                // 否则它会一步步把剩下的步骤跑完，全程没有人接收结果。
+                log.debug("SSE 推送失败，客户端可能已断开，通知 Agent 中止", e);
+                agent.abort();
             }
         });
 
@@ -90,12 +99,33 @@ public class OfferScoutAgentController {
                 // Agent 循环是阻塞的，必须放在独立线程里跑，否则会占住请求线程
                 emitter.send(agent.run(message));
                 emitter.complete();
+            } catch (IOException e) {
+                // 客户端断开时这里必然抛：AsyncRequestNotUsableException 就是 IOException 的子类，
+                // 语义是"响应已经不可用了"。这属于正常现象（结果没人接收），于是：
+                //   ① 不打 ERROR —— 否则日志里堆一堆看着吓人、其实无事发生的假故障；
+                //   ② 不 completeWithError —— 那是在已经废掉的响应上再写一次，
+                //      异常会二次抛给容器，同一个原因在日志里刷两遍栈（实测确认过）。
+                log.debug("SSE 客户端已断开，丢弃最终结果", e);
+                completeQuietly(emitter);
             } catch (Exception e) {
                 log.error("Agent 流式执行失败", e);
-                emitter.completeWithError(e);
+                try {
+                    emitter.completeWithError(e);
+                } catch (Exception ignored) {
+                    // 响应可能已不可用，二次失败没有补救手段，忽略
+                }
             }
         });
 
         return emitter;
+    }
+
+    /** 收尾一个可能已经不可用的 emitter：失败就吞掉，别让它再惊动上层 */
+    private static void completeQuietly(SseEmitter emitter) {
+        try {
+            emitter.complete();
+        } catch (Exception ignored) {
+            // 客户端已断开时 complete() 也可能抛（响应状态已废），这里没有补救手段，忽略
+        }
     }
 }
