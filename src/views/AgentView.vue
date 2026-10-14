@@ -1,35 +1,33 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import MessageComposer from '@/components/MessageComposer.vue'
 import MessageCard from '@/components/MessageCard.vue'
-import { agentRunStream } from '@/api/client'
 import { hhmmss } from '@/utils/markdown'
+import { resetAgent, runAgent, stopAgent, useAgentSession } from '@/stores/agent'
+import { cooldownSeconds } from '@/stores/cooldown'
 
 /**
- * 后端每一步推来的是形如 `第 3 步｜工具 xxx 返回：…` 的一行文本；
- * 最终结论则是单独一次推送的整段 Markdown。
- * 于是「能匹配这个正则的 = 过程轨迹，匹配不上的 = 最终报告」，就此分开。
+ * 状态全部来自模块级 store（见 `@/stores/agent`）。
+ * <p>
+ * 为什么必须提上去：路由切换会让 RouterView 里的组件重挂，状态若留在组件实例里
+ * 就会随重挂清零 —— 一次跑几十秒的 Agent 任务白跑，切回来只剩一个空页面、还得重来。
+ * 提到模块级 ref 之后，切页只重建视图，轨迹与报告都还在。
+ * <p>
+ * 这里只保留纯 UI 的东西：滚动容器的 DOM 引用，以及从状态派生出来的展示值。
+ * SSE 的解析、计时器、请求中止这些「跑一次任务」的逻辑也都搬进了 store。
  */
-const STEP_RE = /^第\s*(\d+)\s*步\s*[｜|]\s*([\s\S]*)$/
+const { draft, task, busy, traces, report, reportTime, error, elapsed, restoredAt } =
+  useAgentSession()
 
-interface Trace {
-  index: number
-  kind: 'think' | 'tool'
-  text: string
-}
+/**
+ * 限流冷却剩余秒数。
+ * <p>
+ * 这一页最容易被撞：Agent 一次任务要跑 3~8 步模型调用，后端把额度压到了 3 次/分钟。
+ * 光把按钮变灰，用户会以为是页面卡了，然后反复点 —— 所以要把「还要等几秒」写在输入框下面。
+ */
+const cooldown = cooldownSeconds
 
-const draft = ref('')
-const task = ref('')
-const busy = ref(false)
-const traces = ref<Trace[]>([])
-const report = ref('')
-const reportTime = ref('')
-const error = ref('')
-const elapsed = ref(0)
 const listEl = ref<HTMLElement | null>(null)
-
-let controller: AbortController | null = null
-let ticker: number | undefined
 
 const examples = [
   '帮我规划未来 3 个月的 Java 后端求职准备，按周拆解',
@@ -44,90 +42,30 @@ async function scrollToEnd() {
   const node = listEl.value
   if (node) node.scrollTop = node.scrollHeight
 }
-watch(traces, scrollToEnd, { deep: true })
-watch(report, scrollToEnd)
 
-function startTicker() {
-  elapsed.value = 0
-  const began = Date.now()
-  ticker = window.setInterval(() => {
-    elapsed.value = Math.floor((Date.now() - began) / 1000)
-  }, 500)
-}
+// deep：traces 里 push 新元素、report 里逐段追加，都要跟着滚到底
+watch([traces, report], scrollToEnd, { deep: true })
 
-function stopTicker() {
-  if (ticker) window.clearInterval(ticker)
-  ticker = undefined
-}
+// 从别页切回来时滚动容器是新建的、停在顶部；补滚一次，别让用户自己往下找结果
+onMounted(() => {
+  void scrollToEnd()
+})
 
-function onChunk(chunk: string) {
-  const match = STEP_RE.exec(chunk)
-  if (match) {
-    const body = match[2].trim()
-    traces.value.push({
-      index: Number(match[1]),
-      // 工具类的步骤会以「工具 xxx 返回」开头，用颜色区分开，扫一眼就知道它在「想」还是「做」
-      kind: body.startsWith('工具') ? 'tool' : 'think',
-      text: body || '（本步无输出）',
-    })
-    return
-  }
-  // 匹配不上步骤格式的，就是收尾那一次推送 —— 最终报告
-  if (!reportTime.value) reportTime.value = hhmmss()
-  report.value += chunk
-}
-
-async function run() {
-  const text = draft.value.trim()
-  if (!text || busy.value) return
-
-  task.value = text
-  draft.value = ''
-  traces.value = []
-  report.value = ''
-  reportTime.value = ''
-  error.value = ''
-  busy.value = true
-  controller = new AbortController()
-  startTicker()
-  await scrollToEnd()
-
-  try {
-    await agentRunStream(text, onChunk, controller.signal)
-  } catch (e) {
-    if ((e as Error)?.name !== 'AbortError') {
-      error.value =
-        report.value ||
-        `执行失败：${(e as Error).message}\n\n检查后端是否已启动（默认 http://localhost:8124），Agent 首次运行可能要等十几秒。`
-    }
-  } finally {
-    busy.value = false
-    controller = null
-    stopTicker()
-    scrollToEnd()
-  }
+/**
+ * 这里刻意**没有** onBeforeUnmount(abort) —— 以前有，后果是"顺手切个页就把正在跑的
+ * Agent 掐了"。现在任务该跑完就跑完，用户切回来正好看到完整结果；真要中止请点「停止」。
+ */
+function run() {
+  void runAgent(draft.value)
 }
 
 function stop() {
-  controller?.abort()
-  busy.value = false
-  stopTicker()
+  stopAgent()
 }
 
 function reset() {
-  if (busy.value) stop()
-  task.value = ''
-  traces.value = []
-  report.value = ''
-  reportTime.value = ''
-  error.value = ''
-  draft.value = ''
+  resetAgent()
 }
-
-onBeforeUnmount(() => {
-  controller?.abort()
-  stopTicker()
-})
 </script>
 
 <template>
@@ -153,7 +91,6 @@ onBeforeUnmount(() => {
       <!-- 空态：任务示例 -->
       <div v-if="!hasOutput" class="intro rise">
         <div class="intro__head">
-          <span class="mono mono--ver">§ 03</span>
           <h2 class="intro__title">把任务交给它，看它自己拆解</h2>
           <p class="intro__desc">
             它会自主决定检索几次、查哪些资料，过程中每一步都会实时出现在下面。
@@ -216,7 +153,10 @@ onBeforeUnmount(() => {
             <span class="tag" :class="error ? '' : 'tag--live'">
               {{ error ? '执行失败' : '作战报告 / FINAL' }}
             </span>
-            <span class="mono">{{ reportTime || hhmmss() }}</span>
+            <!-- 从缓存恢复的要如实标注：不然用户会以为这是刚跑出来的 -->
+            <span class="mono">
+              {{ restoredAt ? '历史结果 · ' + restoredAt : reportTime || hhmmss() }}
+            </span>
           </div>
           <MessageCard
             role="assistant"
@@ -231,6 +171,7 @@ onBeforeUnmount(() => {
     <MessageComposer
       v-model="draft"
       :busy="busy"
+      :cooldown="cooldown"
       placeholder="描述你的目标或困惑，例如「帮我规划 3 个月的后端求职准备」…"
       submit-label="开始侦察"
       @submit="run"
@@ -247,19 +188,21 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
+/* 工具条：与对话页的 .chat__bar 同一套（白底 + 同一内边距） */
 .agent__bar {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 9px 26px;
-  border-bottom: 1px solid var(--rule);
+  padding: 10px 28px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.5);
 }
 
 .agent__id {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 9px;
   min-width: 0;
 }
@@ -267,11 +210,11 @@ onBeforeUnmount(() => {
 .agent__idval {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--ink-2);
-  background: var(--paper-3);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-sm);
-  padding: 1px 7px;
+  color: var(--fg-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  padding: 2px 8px;
   max-width: 52ch;
   white-space: nowrap;
   overflow: hidden;
@@ -291,39 +234,42 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: 24px 26px 34px;
+  padding: 28px 28px 36px;
+  /* 与对话页共用同一条 900px 内容轴：宽屏上不会一路贴到最右边 */
+  padding-left: max(28px, calc((100% - 900px) / 2));
+  padding-right: max(28px, calc((100% - 900px) / 2));
 }
 
 /* --- 空态 --- */
 
 .intro {
-  max-width: 68ch;
-  margin: 3vh auto 0;
   width: 100%;
+  margin: 5vh auto 0;
 }
 
 .intro__head {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
 }
 
 .intro__title {
   margin: 2px 0 0;
-  font-size: 27px;
-  line-height: 1.3;
-  letter-spacing: -0.015em;
-  color: var(--ink);
+  font-size: 30px;
+  line-height: 1.24;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--fg);
 }
 
 .intro__desc {
   margin: 4px 0 0;
-  color: var(--ink-3);
-  font-size: 13.5px;
+  color: var(--fg-3);
+  font-size: 14px;
 }
 
 .intro .rule-x {
-  margin: 20px 0 16px;
+  margin: 22px 0 18px;
 }
 
 .intro__chips {
@@ -334,34 +280,40 @@ onBeforeUnmount(() => {
 }
 
 .chip {
-  padding: 7px 12px;
-  border: 1px solid var(--rule-2);
-  border-radius: 999px;
-  background: var(--paper-2);
-  color: var(--ink-2);
-  font-family: var(--font-body);
-  font-size: 12.5px;
+  padding: 9px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--fg-2);
+  font-family: var(--font-sans);
+  font-size: 13px;
   cursor: pointer;
-  transition: all 0.16s ease;
+  box-shadow: var(--sh-1);
+  transition:
+    transform 0.16s var(--ease),
+    box-shadow 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    background 0.16s var(--ease),
+    color 0.16s var(--ease);
 }
 
 .chip:hover:not(:disabled) {
-  border-color: var(--vermilion);
-  color: var(--vermilion);
-  background: var(--vermilion-wash);
+  border-color: var(--brand);
+  color: var(--brand-3);
+  background: var(--brand-soft);
   transform: translateY(-1px);
+  box-shadow: var(--sh-2);
 }
 
 .chip:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
-/* --- 轨迹 --- */
+/* --- 侦察轨迹 --- */
 
 .trace {
   width: 100%;
-  max-width: 84ch;
 }
 
 .trace__live {
@@ -369,18 +321,19 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 7px;
   font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--vermilion);
+  color: var(--brand);
 }
 
 .trace__pulse {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--vermilion);
-  animation: blink 1.1s steps(1) infinite;
+  background: var(--brand);
+  animation: pulse-ring 2s var(--ease) infinite;
 }
 
 .trace__list {
@@ -389,12 +342,13 @@ onBeforeUnmount(() => {
   padding: 4px 0;
 }
 
+/* 步骤之间改实线、加大行内留白 —— 原来的虚线是旧「档案」调性，在 SaaS 风里显碎 */
 .trace__step {
   display: grid;
   grid-template-columns: 42px 1fr;
-  gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px dashed var(--rule);
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
 }
 
 .trace__step:last-child {
@@ -403,8 +357,9 @@ onBeforeUnmount(() => {
 
 .trace__idx {
   font-size: 12px;
-  letter-spacing: 0.08em;
-  color: var(--vermilion);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--brand);
   padding-top: 2px;
   font-variant-numeric: tabular-nums;
 }
@@ -412,15 +367,15 @@ onBeforeUnmount(() => {
 .trace__main {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
 }
 
 .trace__text {
   margin: 0;
-  font-size: 12.5px;
-  line-height: 1.62;
-  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.68;
+  color: var(--fg-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 8.5em;
@@ -434,9 +389,9 @@ onBeforeUnmount(() => {
 
 .trace__wait {
   position: relative;
-  height: 3px;
-  background: var(--paper-3);
-  border-radius: 2px;
+  height: 4px;
+  background: var(--surface-2);
+  border-radius: var(--r-pill);
   overflow: hidden;
 }
 
@@ -444,17 +399,17 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0 auto 0 0;
   width: 30%;
-  background: var(--vermilion);
+  border-radius: var(--r-pill);
+  background: var(--brand);
   animation: sweep 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
-/* --- 报告 --- */
+/* --- 作战报告 --- */
 
 .report {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-width: 84ch;
 }
 
 .report__meta {

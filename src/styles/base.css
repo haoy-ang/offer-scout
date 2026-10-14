@@ -1,41 +1,106 @@
 /* =============================================================
-   Offer 侦察兵 · 设计系统
-   风格方向：「侦察简报 / 档案」—— 暖纸底、墨黑字、朱砂强调。
-   质感来自版式、留白、等宽元数据标签和纸纹，而不是渐变和圆角气泡。
+   Offer 侦察兵 · 设计系统 v2
+   -------------------------------------------------------------
+   方向：「清爽现代 SaaS」—— Linear / Notion 那一类的干净、克制、有质感：
+        近白底 + 一个鲜明的品牌色 + 大圆角 + 多层柔和阴影 + 清晰的字阶。
+        质感来自层次（面/线/阴影）与排版，而不是纹理和滤镜。
+
+   保留的基因（别丢）：
+     · 品牌红 —— 由原来的「朱砂 #b23a19」升级为现代珊瑚红 #e5484d，
+       色相没变，饱和度和明度提上来，是这套皮肤唯一的记忆点。
+     · 等宽元数据标签（.mono）—— 技术感，也符合「侦察」的工具气质。
+       （原先的「§ 01」章节标号已去掉：编号对用户不产生信息，界面不再显示路由序号。）
+
+   兼容约定：所有旧 class 名保持不变（.panel / .btn / .tag / .prose …），
+   只换皮不换骨，其余功能页可以平滑跟进，不会因为这次改造而错位。
    ============================================================= */
 
 :root {
-  /* 纸与墨 */
-  --paper: #f2ede3;
-  --paper-2: #faf7f0;
-  --paper-3: #e7dfd0;
-  --ink: #16140f;
-  --ink-2: #3e3930;
-  --ink-3: #7c7364;
-  --rule: #d9cfbb;
-  --rule-2: #c0b49b;
+  /* ---------- 底色层次：页面底 → 卡面 → 次级填充 ---------- */
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f2f4f7;
+  --surface-3: #e9ecf2;
 
-  /* 强调：朱砂（主）+ 松绿（次）+ 赭石（警示） */
-  --vermilion: #b23a19;
-  --vermilion-2: #8e2c11;
-  --vermilion-wash: #f0ddd4;
-  --pine: #2b4a42;
-  --pine-wash: #d4e0db;
-  --amber: #a8761b;
+  /* ---------- 文字：主 / 次 / 弱 / 失效 ---------- */
+  --fg: #0f1728;
+  --fg-2: #475467;
+  --fg-3: #98a2b3;
+  --fg-4: #c3cad6;
 
-  --font-body:
-    'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui,
-    -apple-system, sans-serif;
+  /* ---------- 线 ---------- */
+  --line: #eceef2;
+  --line-2: #d5dae2;
+
+  /* ---------- 品牌：现代珊瑚红 ---------- */
+  --brand: #e5484d;
+  --brand-2: #d33a3f;
+  --brand-3: #b82d32;
+  --brand-soft: #fff1f1;
+  --brand-soft-2: #ffe1e2;
+  --brand-ring: rgba(229, 72, 77, 0.18);
+  --brand-grad: linear-gradient(135deg, #f46a4e 0%, #e5484d 55%, #d33a3f 100%);
+
+  /* ---------- 次强调：松青（知识库 / 成功态） ---------- */
+  --teal: #0d9488;
+  --teal-2: #0b8175;
+  --teal-soft: #e6f6f4;
+  --teal-ring: rgba(13, 148, 136, 0.16);
+
+  /* ---------- 语义 ---------- */
+  --warn: #d97706;
+  --warn-soft: #fff7ea;
+
+  /* 边缘色：给「引用块左侧竖线」这类细线用。
+     比 --brand-ring / --teal-ring（0.16~0.18，专供 focus 光圈与内描边）实一点，
+     否则 2px 的竖线在 2x 屏上几乎看不见。 */
+  --brand-edge: rgba(229, 72, 77, 0.3);
+  --teal-edge: rgba(13, 148, 136, 0.34);
+
+  /* ----------
+     字体：刻意不引外部字体。
+     本机已有 Noto Sans SC（思源黑体）与 Source Code Pro，
+     字形质量明显高于默认的雅黑，且离线可用、零请求风险。
+     ---------- */
+  --font-sans:
+    'Noto Sans SC', 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei UI',
+    'Microsoft YaHei', system-ui, -apple-system, sans-serif;
   --font-mono:
-    'JetBrains Mono', 'Cascadia Mono', 'Consolas', 'SFMono-Regular', 'Courier New', monospace;
+    'Source Code Pro', 'JetBrains Mono', 'Cascadia Mono', 'Consolas', 'SFMono-Regular',
+    'Courier New', monospace;
 
-  /* 刻意用近乎直角的圆角 —— 圆角越大越像消费级 App，越小越像档案 */
-  --r-sm: 2px;
-  --r-md: 4px;
+  /* ---------- 圆角：SaaS 的"软"主要来自这里 ---------- */
+  --r-xs: 6px;
+  --r-sm: 9px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-pill: 999px;
 
-  --rail-w: 78px;
-  --shadow-1: 0 1px 0 var(--rule), 0 8px 24px -18px rgba(22, 20, 15, 0.5);
-  --shadow-2: 0 1px 0 var(--rule), 0 18px 40px -26px rgba(22, 20, 15, 0.55);
+  /* ---------- 阴影：多层叠加出"柔和悬浮"，而不是一条硬边 ---------- */
+  --sh-1: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --sh-2: 0 2px 4px -1px rgba(16, 24, 40, 0.05), 0 10px 22px -8px rgba(16, 24, 40, 0.1);
+  --sh-3: 0 8px 18px -8px rgba(16, 24, 40, 0.12), 0 28px 56px -20px rgba(16, 24, 40, 0.18);
+  --sh-brand: 0 8px 20px -8px rgba(229, 72, 77, 0.5);
+
+  /* ---------- 动效缓动 ---------- */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* 左栏宽度：竖排窄条 → 常规 SaaS 侧边栏 */
+  --rail-w: 232px;
+}
+
+/*
+ * 窄屏兜底（平板竖屏 / 手机）。
+ * 232px 的侧栏在 390px 宽的屏幕上要吃掉六成宽，内容区会被挤到没法用；
+ * 这里收到 76px，由 SideRail 自己切成「图标在上、短标签在下」的紧凑形态。
+ * 只动这一个变量 + 那一处媒体查询，桌面端完全不受影响。
+ */
+@media (max-width: 860px) {
+  :root {
+    --rail-w: 76px;
+  }
 }
 
 *,
@@ -52,108 +117,91 @@ body,
 }
 
 body {
-  font-family: var(--font-body);
-  font-size: 14.5px;
-  line-height: 1.7;
-  color: var(--ink);
-  background-color: var(--paper);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--fg);
+  background-color: var(--bg);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overflow: hidden;
 }
 
-/* 极淡的方格纸底纹 */
+/* 背景氛围：两团极淡的品牌光晕。
+   替掉原来的「方格纸 + 噪点 + 暗角」三层纹理 —— SaaS 的干净是靠留白，不是靠图案。 */
 body::before {
   content: '';
   position: fixed;
   inset: 0;
-  pointer-events: none;
   z-index: 0;
-  background-image:
-    linear-gradient(var(--rule) 1px, transparent 1px),
-    linear-gradient(90deg, var(--rule) 1px, transparent 1px);
-  background-size: 44px 44px;
-  opacity: 0.22;
-}
-
-/* 右上角暖光 + 纸纹颗粒 */
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
   pointer-events: none;
-  z-index: 1;
-  background-image:
-    radial-gradient(120% 90% at 88% -10%, rgba(178, 58, 25, 0.09), transparent 62%),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.42'/%3E%3C/svg%3E");
-  mix-blend-mode: multiply;
-  opacity: 0.5;
+  background:
+    radial-gradient(58% 42% at 100% 0%, rgba(229, 72, 77, 0.07), transparent 68%),
+    radial-gradient(50% 40% at 0% 100%, rgba(13, 148, 136, 0.05), transparent 70%);
 }
 
 ::selection {
-  background: var(--vermilion);
-  color: var(--paper-2);
+  background: var(--brand-soft-2);
+  color: var(--brand-3);
 }
 
 /* ---------- 排版基元 ---------- */
 
 .mono {
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.14em;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--ink-3);
+  color: var(--fg-3);
 }
 
 .mono--ink {
-  color: var(--ink);
+  color: var(--fg-2);
 }
 
 .mono--ver {
-  color: var(--vermilion);
-}
-
-/* 章节标号：§ 01 */
-.sec-no {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.12em;
-  color: var(--vermilion);
+  color: var(--brand);
 }
 
 .rule-x {
   height: 1px;
-  background: var(--rule);
+  background: var(--line);
   border: 0;
   margin: 0;
 }
 
-/* 朱砂细描边小标签 */
+/* 标签：药丸 + 浅底，不再是方角细边框 */
 .tag {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 7px;
-  border: 1px solid var(--rule-2);
-  border-radius: var(--r-sm);
+  padding: 3px 9px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--surface);
   font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.1em;
+  font-weight: 500;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--ink-2);
-  background: var(--paper-2);
+  color: var(--fg-2);
+  white-space: nowrap;
 }
 
 .tag--live {
-  border-color: var(--vermilion);
-  color: var(--vermilion);
-  background: var(--vermilion-wash);
+  border-color: transparent;
+  color: var(--brand-2);
+  background: var(--brand-soft);
+  box-shadow: inset 0 0 0 1px rgba(229, 72, 77, 0.15);
 }
 
 .tag--pine {
-  border-color: var(--pine);
-  color: var(--pine);
-  background: var(--pine-wash);
+  border-color: transparent;
+  color: var(--teal-2);
+  background: var(--teal-soft);
+  box-shadow: inset 0 0 0 1px var(--teal-ring);
 }
 
 /* ---------- 按钮 ---------- */
@@ -163,75 +211,80 @@ body::after {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 9px 16px;
-  border: 1px solid var(--ink);
+  padding: 10px 18px;
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
-  background: var(--ink);
-  color: var(--paper-2);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  background: var(--brand-grad);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   cursor: pointer;
+  box-shadow: var(--sh-brand);
   transition:
-    transform 0.12s ease,
-    background 0.15s ease,
-    color 0.15s ease,
-    box-shadow 0.15s ease;
+    transform 0.16s var(--ease),
+    box-shadow 0.2s var(--ease),
+    background 0.2s var(--ease),
+    color 0.16s var(--ease),
+    border-color 0.16s var(--ease);
 }
 
 .btn:hover:not(:disabled) {
-  background: var(--vermilion);
-  border-color: var(--vermilion);
   transform: translateY(-1px);
-  box-shadow: 0 6px 16px -10px rgba(142, 44, 17, 0.9);
+  box-shadow: 0 12px 26px -10px rgba(229, 72, 77, 0.62);
 }
 
 .btn:active:not(:disabled) {
-  transform: translateY(0);
+  transform: translateY(0) scale(0.985);
 }
 
 .btn:disabled {
-  opacity: 0.38;
+  opacity: 0.5;
   cursor: not-allowed;
-}
-
-.btn--ghost {
-  background: transparent;
-  color: var(--ink);
-  border-color: var(--rule-2);
-}
-
-.btn--ghost:hover:not(:disabled) {
-  background: var(--paper-3);
-  color: var(--ink);
-  border-color: var(--ink);
   box-shadow: none;
 }
 
+.btn--ghost {
+  background: var(--surface);
+  color: var(--fg-2);
+  border-color: var(--line-2);
+  box-shadow: var(--sh-1);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--fg);
+  border-color: var(--line-2);
+  box-shadow: var(--sh-2);
+}
+
 .btn--stop {
-  background: transparent;
-  color: var(--vermilion);
-  border-color: var(--vermilion);
+  background: var(--surface);
+  color: var(--brand-2);
+  border-color: rgba(229, 72, 77, 0.38);
+  box-shadow: var(--sh-1);
 }
 
 .btn--stop:hover:not(:disabled) {
-  background: var(--vermilion);
-  color: var(--paper-2);
+  background: var(--brand-soft);
+  border-color: var(--brand);
+  color: var(--brand-3);
 }
 
 .btn--tiny {
-  padding: 4px 9px;
-  font-size: 9.5px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-radius: var(--r-xs);
 }
 
 /* ---------- 面板 ---------- */
 
 .panel {
-  background: var(--paper-2);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-1);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-1);
 }
 
 .panel__head {
@@ -239,8 +292,8 @@ body::after {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 11px 16px;
-  border-bottom: 1px solid var(--rule);
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
 }
 
 /* ---------- 滚动条 ---------- */
@@ -248,12 +301,12 @@ body::after {
 .scroll {
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: var(--rule-2) transparent;
+  scrollbar-color: var(--line-2) transparent;
 }
 
 .scroll::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
 }
 
 .scroll::-webkit-scrollbar-track {
@@ -261,14 +314,14 @@ body::after {
 }
 
 .scroll::-webkit-scrollbar-thumb {
-  background: var(--rule-2);
+  background: var(--line-2);
   border: 3px solid transparent;
   background-clip: content-box;
-  border-radius: 6px;
+  border-radius: var(--r-pill);
 }
 
 .scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--ink-3);
+  background: var(--fg-4);
   background-clip: content-box;
 }
 
@@ -279,7 +332,7 @@ body::after {
 .prose {
   font-size: 14.5px;
   line-height: 1.78;
-  color: var(--ink-2);
+  color: var(--fg-2);
   overflow-wrap: anywhere;
 }
 
@@ -295,36 +348,36 @@ body::after {
 .prose h2,
 .prose h3,
 .prose h4 {
-  color: var(--ink);
+  color: var(--fg);
   line-height: 1.35;
   font-weight: 700;
-  letter-spacing: -0.01em;
-  margin: 1.7em 0 0.6em;
+  letter-spacing: -0.011em;
+  margin: 1.65em 0 0.55em;
 }
 
 .prose h1 {
-  font-size: 21px;
-  padding-bottom: 0.35em;
-  border-bottom: 2px solid var(--ink);
+  font-size: 22px;
 }
 
+/* 保留品牌色竖条当识别符 —— 这是这套皮肤少数"不通用"的细节之一 */
 .prose h2 {
-  font-size: 17.5px;
-  padding-left: 11px;
-  border-left: 3px solid var(--vermilion);
+  font-size: 17px;
+  padding-left: 12px;
+  border-left: 3px solid var(--brand);
 }
 
 .prose h3 {
-  font-size: 15.5px;
-  color: var(--ink-2);
+  font-size: 15px;
+  color: var(--fg);
 }
 
 .prose h4 {
   font-family: var(--font-mono);
-  font-size: 11.5px;
-  letter-spacing: 0.1em;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--ink-3);
+  color: var(--fg-3);
 }
 
 .prose p {
@@ -332,14 +385,16 @@ body::after {
 }
 
 .prose strong {
-  color: var(--ink);
+  color: var(--fg);
   font-weight: 700;
 }
 
 .prose em {
-  color: var(--vermilion-2);
+  color: var(--brand-2);
   font-style: normal;
-  border-bottom: 1px dashed var(--vermilion);
+  background: var(--brand-soft);
+  border-radius: 3px;
+  padding: 0.5px 4px;
 }
 
 .prose ul,
@@ -349,56 +404,61 @@ body::after {
 }
 
 .prose li {
-  margin: 0.32em 0;
+  margin: 0.34em 0;
 }
 
 .prose li::marker {
-  color: var(--vermilion);
+  color: var(--brand);
   font-family: var(--font-mono);
   font-size: 0.9em;
 }
 
 .prose a {
-  color: var(--vermilion-2);
+  color: var(--brand-2);
+  font-weight: 500;
   text-decoration: none;
-  border-bottom: 1px solid var(--vermilion);
+  border-bottom: 1px solid var(--brand-ring);
 }
 
 .prose a:hover {
-  background: var(--vermilion-wash);
+  border-bottom-color: var(--brand);
 }
 
 .prose hr {
   height: 1px;
   border: 0;
-  background: var(--rule-2);
+  background: var(--line);
   margin: 1.6em 0;
 }
 
 .prose blockquote {
   margin: 1em 0;
-  padding: 2px 0 2px 15px;
-  border-left: 2px solid var(--rule-2);
-  color: var(--ink-3);
+  padding: 10px 16px;
+  border-left: 3px solid var(--brand);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--brand-soft);
+  color: var(--fg-2);
 }
 
 .prose code {
   font-family: var(--font-mono);
-  font-size: 0.87em;
-  background: var(--paper-3);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-sm);
-  padding: 1px 5px;
-  color: var(--vermilion-2);
+  font-size: 0.875em;
+  font-weight: 500;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  padding: 1.5px 6px;
+  color: var(--brand-2);
 }
 
 .prose pre {
-  background: #1d1a14;
-  color: #e8e0cf;
-  border-radius: var(--r-sm);
-  padding: 13px 15px;
+  background: #0f1728;
+  color: #dfe4ee;
+  border-radius: var(--r-md);
+  padding: 15px 17px;
   overflow-x: auto;
   margin: 1em 0;
+  box-shadow: var(--sh-1);
 }
 
 .prose pre code {
@@ -407,35 +467,46 @@ body::after {
   padding: 0;
   color: inherit;
   font-size: 12.5px;
-  line-height: 1.65;
+  font-weight: 400;
+  line-height: 1.7;
 }
 
+/* 表格：靠 border-spacing:0 + overflow:hidden 做出圆角外框 */
 .prose table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   margin: 1.1em 0;
   font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
 }
 
 .prose th {
-  background: var(--paper-3);
+  background: var(--surface-2);
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   text-align: left;
-  color: var(--ink);
+  color: var(--fg-2);
 }
 
 .prose th,
 .prose td {
-  border: 1px solid var(--rule);
-  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 12px;
   vertical-align: top;
 }
 
+.prose tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .prose tbody tr:nth-child(even) {
-  background: rgba(231, 223, 208, 0.4);
+  background: #fafbfc;
 }
 
 /* ---------- 动效 ---------- */
@@ -462,26 +533,31 @@ body::after {
   }
 }
 
-@keyframes sweep {
-  from {
-    transform: translateX(-100%);
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.4);
   }
-  to {
-    transform: translateX(320%);
+  70% {
+    box-shadow: 0 0 0 6px rgba(229, 72, 77, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(229, 72, 77, 0);
   }
 }
 
 .rise {
-  animation: rise 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: rise 0.46s var(--ease-out) both;
 }
 
+/* 流式光标：细一点更精致 */
 .caret {
   display: inline-block;
-  width: 7px;
+  width: 2px;
   height: 1.05em;
   vertical-align: -0.16em;
-  background: var(--vermilion);
-  animation: blink 1s steps(1) infinite;
+  border-radius: 2px;
+  background: var(--brand);
+  animation: blink 1.05s steps(1) infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,27 +1,38 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import MessageComposer from '@/components/MessageComposer.vue'
 import MessageCard from '@/components/MessageCard.vue'
+import type { InterviewType } from '@/api/client'
 import {
-  interviewStream,
-  reportInterview,
-  startInterview,
-  type InterviewReport,
-  type InterviewType,
-} from '@/api/client'
+  backToInterview as backToInterviewPhase,
+  beginInterview,
+  finishInterview,
+  restartInterview,
+  sendAnswer,
+  stopAnswer,
+  useInterviewSession,
+} from '@/stores/interview'
 import { hhmmss } from '@/utils/markdown'
+import { cooldownSeconds } from '@/stores/cooldown'
 
 /**
  * 模拟面试间。
  * <p>
  * 这是全站唯一一个「有状态的三段式」页面，用 phase 显式建模：
  *   setup → interview → report
- * 三段之间不靠 URL 承载状态，而是靠内存里的 sessionId 串起来 ——
- * 刷新页面就等于重新开一场面试，这是刻意为之（一场面试本来也不该跨刷新续上）。
+ * 三段之间不靠 URL 承载状态，而是靠内存里的 sessionId 串起来。
+ * <p>
+ * 状态（phase / 已答记录 / 复盘）全部来自模块级 store（见 `@/stores/interview`）：
+ * 一场面试恰恰是最经不起"顺手点一下别的功能"的 —— 状态若留在组件实例里，
+ * 用户去别页瞄一眼，答到第 5 题也得从头再来。提到模块级后，切页只重建视图，面试能接着答，
+ * 复盘也能回来再看。
+ * <p>
+ * <b>边界不变</b>：模块级状态只活在"当前这次页面加载"里 —— 按 F5 刷新依然等于重开一场面试，
+ * 这是刻意为之（一场面试本来也不该跨刷新续上）。
  * <p>
  * 和后端的分工：前端只负责「收集岗位/类型 → 逐轮转述回答 → 展示复盘」，
- * 面试官的记忆、追问策略、复盘评分全在后端。所以切走了面试类型/岗位的原始参数
- * 每一轮都要原样带回后端（后端是无状态的，不存这些）。
+ * 面试官的记忆、追问策略、复盘评分全在后端。所以每一项动作都要把岗位/类型原样带回后端
+ * （后端是无状态的，不存这些）。
  */
 
 const TYPES: { key: InterviewType; label: string; hint: string }[] = [
@@ -36,35 +47,23 @@ const PRIORITY = {
   low: { label: '低优先', cls: 'pri--low' },
 } as const
 
-interface Turn {
-  role: 'user' | 'assistant'
-  text: string
-  time: string
-  error?: boolean
-}
-
-type Phase = 'setup' | 'interview' | 'report'
-
-const phase = ref<Phase>('setup')
-const role = ref('Java 后端开发实习生')
-const type = ref<InterviewType>('tech')
-
-const sessionId = ref('')
-const turns = ref<Turn[]>([])
-const draft = ref('')
-const busy = ref(false)
-
-const report = ref<InterviewReport | null>(null)
-const error = ref('')
+const { phase, role, type, turns, draft, busy, report, error } = useInterviewSession()
 
 const listEl = ref<HTMLElement | null>(null)
 const bodyEl = ref<HTMLElement | null>(null)
-let controller: AbortController | null = null
+
+/**
+ * 限流冷却剩余秒数。开始面试与生成复盘都是 5 次/分钟，
+ * 追问是 30 次/分钟 —— 额度不同，但冷却共用一条：撞了哪个都得等满窗口。
+ */
+const cooldown = cooldownSeconds
 
 const typeLabel = computed(() => TYPES.find((t) => t.key === type.value)?.label ?? '技术面')
 /** 已问答轮数 = 候选人回答的次数 */
 const answered = computed(() => turns.value.filter((t) => t.role === 'user').length)
-const canStart = computed(() => !busy.value && role.value.trim().length > 0)
+const canStart = computed(
+  () => !busy.value && cooldown.value === 0 && role.value.trim().length > 0
+)
 
 async function scrollToEnd() {
   await nextTick()
@@ -72,15 +71,33 @@ async function scrollToEnd() {
   if (node) node.scrollTop = node.scrollHeight
 }
 
+// deep：每轮问答都会往 turns 里 push，推完要跟到底
 watch(turns, scrollToEnd, { deep: true })
 
-/** 复盘结论 → 视觉档位：通过=松绿，待定=琥珀，不通过=朱砂 */
+// 从别页切回来时列表是新建的、停在顶部；补滚到底，接着上一轮的上下文看
+onMounted(() => {
+  void scrollToEnd()
+})
+
+/**
+ * 复盘结论 → 视觉档位：通过=松绿，待定=琥珀，不通过=朱砂。
+ * <p>
+ * 判据顺序很关键：**先判否定、再判肯定**。原先写成 `includes('通过') && !includes('不')`，
+ * 碰到「不通过」这种不带"不建议"三字的表述就会漏判、掉进琥珀色 ——
+ * 结论明明是"没过"却显示成"待定"，这种错配色比不配色更误导人。
+ * 所以先把所有否定表述归红档，剩下含"通过"的才是绿档。
+ * <p>
+ * TODO：更彻底的做法是让后端把 verdict 收敛成枚举（建议通过 / 待定 / 不建议通过），
+ * 前端就不必猜字符串了。
+ */
 const verdict = computed(() => {
   const v = report.value?.verdict ?? ''
-  if (v.includes('通过') && !v.includes('不'))
-    return { text: v, cls: 'score--pine', tag: 'tag--pine' }
-  if (v.includes('不建议')) return { text: v, cls: 'score--ver', tag: 'tag--live' }
-  return { text: v || '待定', cls: 'score--amber', tag: '' }
+  if (!v) return { text: '待定', cls: 'score--amber', tag: '' }
+  if (v.includes('不建议') || v.includes('未通过') || v.includes('不通过')) {
+    return { text: v, cls: 'score--ver', tag: 'tag--live' }
+  }
+  if (v.includes('通过')) return { text: v, cls: 'score--pine', tag: 'tag--pine' }
+  return { text: v, cls: 'score--amber', tag: '' }
 })
 
 function dimTone(score: number): string {
@@ -89,111 +106,42 @@ function dimTone(score: number): string {
   return 'dim--ver'
 }
 
-/* ---------------- 开始面试 ---------------- */
+/*
+ * 三段动作：真正的状态流转（phase / turns / report / 请求）都在 store 里，
+ * 视图这边只负责滚动位置这类 UI 副作用。
+ */
 
 async function begin() {
-  if (!canStart.value) return
-  busy.value = true
-  error.value = ''
-  turns.value = []
-  report.value = null
-
-  try {
-    const res = await startInterview(role.value.trim(), type.value)
-    sessionId.value = res.sessionId
-    turns.value.push({ role: 'assistant', text: res.opening, time: hhmmss() })
-    phase.value = 'interview'
-    scrollToEnd()
-  } catch (e) {
-    error.value = (e as Error).message || '面试开启失败，请稍后重试。'
-  } finally {
-    busy.value = false
-  }
+  await beginInterview()
+  await scrollToEnd()
 }
 
-/* ---------------- 逐轮回答 ---------------- */
-
 async function send() {
-  const text = draft.value.trim()
-  if (!text || busy.value || phase.value !== 'interview') return
-
-  turns.value.push({ role: 'user', text, time: hhmmss() })
-  draft.value = ''
-
-  turns.value.push({ role: 'assistant', text: '', time: hhmmss() })
-  const reply = turns.value[turns.value.length - 1]
-  busy.value = true
-  controller = new AbortController()
-
-  const onChunk = (chunk: string) => {
-    reply.text += chunk
-  }
-
-  try {
-    await interviewStream(
-      sessionId.value,
-      text,
-      role.value.trim(),
-      type.value,
-      onChunk,
-      controller.signal
-    )
-  } catch (e) {
-    if ((e as Error)?.name !== 'AbortError') {
-      reply.error = true
-      reply.text = reply.text || `请求失败：${(e as Error).message}`
-    }
-  } finally {
-    busy.value = false
-    controller = null
-    scrollToEnd()
-  }
+  await sendAnswer()
+  await scrollToEnd()
 }
 
 function stop() {
-  controller?.abort()
-  busy.value = false
+  stopAnswer()
 }
 
-/* ---------------- 结束并复盘 ---------------- */
-
 async function finish() {
-  if (busy.value || phase.value !== 'interview') return
-  if (answered.value === 0) {
-    error.value = '至少回答一轮，才能生成有依据的复盘。'
-    return
-  }
-  busy.value = true
-  error.value = ''
-
-  try {
-    report.value = await reportInterview(sessionId.value, role.value.trim(), type.value)
-    phase.value = 'report'
+  await finishInterview()
+  // 切到复盘段后回到顶部，先看总分和结论
+  if (phase.value === 'report') {
     await nextTick()
     if (bodyEl.value) bodyEl.value.scrollTop = 0
-  } catch (e) {
-    error.value = (e as Error).message || '复盘生成失败，请稍后重试。'
-  } finally {
-    busy.value = false
   }
 }
 
 function backToInterview() {
-  phase.value = 'interview'
-  scrollToEnd()
+  backToInterviewPhase()
+  void scrollToEnd()
 }
 
 function restart() {
-  controller?.abort()
-  phase.value = 'setup'
-  sessionId.value = ''
-  turns.value = []
-  draft.value = ''
-  report.value = null
-  error.value = ''
+  restartInterview()
 }
-
-onBeforeUnmount(() => controller?.abort())
 </script>
 
 <template>
@@ -215,7 +163,7 @@ onBeforeUnmount(() => controller?.abort())
         <button
           v-if="phase === 'interview'"
           class="btn btn--ghost btn--tiny"
-          :disabled="busy"
+          :disabled="busy || cooldown > 0"
           @click="finish"
         >
           结束并复盘
@@ -239,7 +187,7 @@ onBeforeUnmount(() => controller?.abort())
       <template v-if="phase === 'setup'">
         <section class="panel setup rise">
           <header class="panel__head">
-            <span class="mono mono--ver">§ 07 · 模拟面试 / SETUP</span>
+            <span class="mono mono--ver">模拟面试 / SETUP</span>
             <span class="mono">AI 扮演面试官，多轮追问</span>
           </header>
 
@@ -277,7 +225,10 @@ onBeforeUnmount(() => controller?.abort())
             <button class="btn" type="button" :disabled="!canStart" @click="begin">
               {{ busy ? '开启中…' : '开始面试' }}
             </button>
-            <span class="mono setup__note">一场面试 = 多轮追问，结束后由同一份记录生成复盘</span>
+            <span v-if="cooldown > 0" class="mono setup__note setup__note--warn">
+              触发限流了，{{ cooldown }} 秒后可再试
+            </span>
+            <span v-else class="mono setup__note">一场面试 = 多轮追问，结束后由同一份记录生成复盘</span>
           </div>
         </section>
 
@@ -422,6 +373,7 @@ onBeforeUnmount(() => controller?.abort())
       v-if="phase === 'interview'"
       v-model="draft"
       :busy="busy"
+      :cooldown="cooldown"
       placeholder="输入你的回答，回车发送…"
       submit-label="回答"
       @submit="send"
@@ -438,19 +390,21 @@ onBeforeUnmount(() => controller?.abort())
   flex-direction: column;
 }
 
+/* 工具条：与对话页 / 作战规划页同一套（白底 + 同一内边距） */
 .itv__bar {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 9px 26px;
-  border-bottom: 1px solid var(--rule);
+  padding: 10px 28px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.5);
 }
 
 .itv__id {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 9px;
   min-width: 0;
 }
@@ -458,11 +412,12 @@ onBeforeUnmount(() => controller?.abort())
 .itv__idval {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--ink-2);
-  background: var(--paper-3);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-sm);
-  padding: 1px 7px;
+  font-weight: 500;
+  color: var(--fg-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  padding: 2px 8px;
   max-width: 52ch;
   white-space: nowrap;
   overflow: hidden;
@@ -482,22 +437,27 @@ onBeforeUnmount(() => controller?.abort())
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: 24px 26px 40px;
+  padding: 28px 28px 36px;
+  /* 与对话页共用同一条 900px 内容轴 */
+  padding-left: max(28px, calc((100% - 900px) / 2));
+  padding-right: max(28px, calc((100% - 900px) / 2));
 }
 
 /* ---------- 准备段 ---------- */
+/* 表单刻意收窄到 720px：一段单输入框的表单拉满 900px 会显得空旷，
+   数据密集的复盘段才用满内容轴。 */
 
 .setup {
   max-width: 720px;
   width: 100%;
-  padding: 6px 22px 22px;
+  padding-bottom: 22px;
 }
 
 .setup__field {
   display: flex;
   flex-direction: column;
   gap: 9px;
-  padding-top: 18px;
+  padding: 18px 22px 0;
 }
 
 .setup__label {
@@ -505,27 +465,29 @@ onBeforeUnmount(() => controller?.abort())
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--ink-3);
+  color: var(--fg-3);
 }
 
 .setup__input {
   width: 100%;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-body);
+  background: var(--surface-2);
+  color: var(--fg);
+  font-family: var(--font-sans);
   font-size: 14px;
   padding: 11px 13px;
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+    border-color 0.15s var(--ease),
+    box-shadow 0.15s var(--ease),
+    background 0.15s var(--ease);
 }
 
 .setup__input:focus {
   outline: none;
-  border-color: var(--vermilion);
-  box-shadow: 0 0 0 3px var(--vermilion-wash);
+  border-color: var(--brand);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--brand-ring);
 }
 
 .segs {
@@ -534,27 +496,37 @@ onBeforeUnmount(() => controller?.abort())
   gap: 10px;
 }
 
+/* 选中态从「整块变黑」改成「品牌浅底 + 品牌描边」——
+   黑底块在浅色 SaaS 皮肤里太重，也和左栏/档案页的选中态不是一套语言。 */
 .seg {
   display: flex;
   flex-direction: column;
   gap: 4px;
   align-items: flex-start;
   text-align: left;
-  padding: 12px 13px;
-  border: 1px solid var(--rule-2);
-  border-radius: var(--r-sm);
-  background: var(--paper-2);
+  padding: 13px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--surface);
   cursor: pointer;
-  transition: all 0.16s ease;
+  box-shadow: var(--sh-1);
+  transition:
+    transform 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    background 0.16s var(--ease),
+    box-shadow 0.16s var(--ease);
 }
 
 .seg:hover:not(:disabled) {
-  border-color: var(--vermilion);
+  border-color: var(--brand);
+  transform: translateY(-1px);
+  box-shadow: var(--sh-2);
 }
 
 .seg.is-on {
-  border-color: var(--ink);
-  background: var(--ink);
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  box-shadow: inset 0 0 0 1px var(--brand-ring);
 }
 
 .seg:disabled {
@@ -565,34 +537,39 @@ onBeforeUnmount(() => controller?.abort())
 .seg__label {
   font-size: 14px;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--fg);
 }
 
 .seg.is-on .seg__label {
-  color: var(--paper-2);
+  color: var(--brand-3);
 }
 
 .seg__hint {
   font-size: 11px;
   line-height: 1.5;
-  color: var(--ink-3);
+  color: var(--fg-3);
 }
 
 .seg.is-on .seg__hint {
-  color: var(--paper-3);
+  color: var(--fg-2);
 }
 
 .setup__submit {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-top: 22px;
+  margin: 22px 22px 0;
   padding-top: 18px;
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--line);
 }
 
 .setup__note {
-  color: var(--ink-3);
+  color: var(--fg-3);
+}
+
+/* 限流冷却：不是错误，用赭石提醒，别跟「开始面试」抢注意力 */
+.setup__note--warn {
+  color: var(--warn);
 }
 
 .intro {
@@ -601,24 +578,24 @@ onBeforeUnmount(() => controller?.abort())
 }
 
 .intro .rule-x {
-  margin-bottom: 16px;
+  margin: 0 0 16px;
 }
 
 .intro__desc {
   margin: 0;
   max-width: 74ch;
-  color: var(--ink-3);
-  font-size: 13.5px;
+  color: var(--fg-3);
+  font-size: 14px;
   line-height: 1.8;
 }
 
 .intro__desc strong {
-  color: var(--ink);
+  color: var(--fg);
 }
 
 .intro__err {
   margin: 14px 0 0;
-  color: var(--vermilion-2);
+  color: var(--brand-2);
   font-size: 13.5px;
 }
 
@@ -634,7 +611,7 @@ onBeforeUnmount(() => controller?.abort())
 
 .thread__err {
   margin: 0;
-  color: var(--vermilion-2);
+  color: var(--brand-2);
   font-size: 13px;
 }
 
@@ -645,19 +622,18 @@ onBeforeUnmount(() => controller?.abort())
 .dims,
 .points,
 .suggs {
-  max-width: 960px;
   width: 100%;
 }
 
 .error__msg {
   margin: 0;
   padding: 18px;
-  color: var(--vermilion-2);
+  color: var(--brand-2);
   font-size: 13.5px;
 }
 
 .scorecard {
-  padding: 22px;
+  padding: 24px;
 }
 
 .scorecard__main {
@@ -679,25 +655,26 @@ onBeforeUnmount(() => controller?.abort())
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.03em;
-  color: var(--ink);
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
 }
 
 .scorecard__val.score--pine {
-  color: var(--pine);
+  color: var(--teal);
 }
 
 .scorecard__val.score--amber {
-  color: var(--amber);
+  color: var(--warn);
 }
 
 .scorecard__val.score--ver {
-  color: var(--vermilion);
+  color: var(--brand);
 }
 
 .scorecard__unit {
   font-family: var(--font-mono);
   font-size: 13px;
-  color: var(--ink-3);
+  color: var(--fg-3);
 }
 
 .scorecard__meta {
@@ -710,21 +687,21 @@ onBeforeUnmount(() => controller?.abort())
 .scorecard__summary {
   margin: 16px 0 0;
   padding-top: 16px;
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--line);
   font-size: 14.5px;
-  line-height: 1.75;
-  color: var(--ink-2);
+  line-height: 1.78;
+  color: var(--fg-2);
 }
 
 .dims__list {
   list-style: none;
   margin: 0;
-  padding: 6px 18px 14px;
+  padding: 8px 20px 16px;
 }
 
 .dim {
-  padding: 12px 0;
-  border-bottom: 1px dashed var(--rule);
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .dim:last-child {
@@ -741,58 +718,60 @@ onBeforeUnmount(() => controller?.abort())
 .dim__name {
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--fg);
 }
 
 .dim__score {
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .dim__score.dim--pine {
-  color: var(--pine);
+  color: var(--teal);
 }
 
 .dim__score.dim--amber {
-  color: var(--amber);
+  color: var(--warn);
 }
 
 .dim__score.dim--ver {
-  color: var(--vermilion);
+  color: var(--brand);
 }
 
 .dim__track {
   height: 6px;
-  margin: 7px 0 5px;
-  background: var(--paper-3);
-  border-radius: 3px;
+  margin: 8px 0 6px;
+  background: var(--surface-2);
+  border-radius: var(--r-pill);
   overflow: hidden;
 }
 
 .dim__fill {
   display: block;
   height: 100%;
-  border-radius: 3px;
-  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  border-radius: var(--r-pill);
+  transition: width 0.6s var(--ease);
 }
 
 .dim__fill.dim--pine {
-  background: var(--pine);
+  background: var(--teal);
 }
 
 .dim__fill.dim--amber {
-  background: var(--amber);
+  background: var(--warn);
 }
 
 .dim__fill.dim--ver {
-  background: var(--vermilion);
+  background: var(--brand);
 }
 
 .dim__comment {
   margin: 0;
   font-size: 12.5px;
-  color: var(--ink-3);
+  line-height: 1.65;
+  color: var(--fg-3);
 }
 
 .points__list {
@@ -803,10 +782,10 @@ onBeforeUnmount(() => controller?.abort())
 
 .point {
   display: grid;
-  grid-template-columns: 36px 1fr;
+  grid-template-columns: 40px 1fr;
   gap: 12px;
-  padding: 13px 18px;
-  border-bottom: 1px dashed var(--rule);
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
 }
 
 .point:last-child {
@@ -814,21 +793,23 @@ onBeforeUnmount(() => controller?.abort())
 }
 
 .point__idx {
+  font-weight: 600;
   padding-top: 2px;
+  font-variant-numeric: tabular-nums;
 }
 
 .points--hit .point__idx {
-  color: var(--pine);
+  color: var(--teal);
 }
 
 .points--gap .point__idx {
-  color: var(--vermilion);
+  color: var(--brand);
 }
 
 .point__main {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -836,7 +817,8 @@ onBeforeUnmount(() => controller?.abort())
   margin: 0;
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--fg);
+  line-height: 1.6;
 }
 
 .point__req::before {
@@ -848,21 +830,29 @@ onBeforeUnmount(() => controller?.abort())
 
 .points--hit .point__req::before {
   content: '✓';
-  color: var(--pine);
+  color: var(--teal);
 }
 
 .points--gap .point__req::before {
   content: '✗';
-  color: var(--vermilion);
+  color: var(--brand);
 }
 
 .point__detail {
   margin: 0;
   font-size: 13px;
-  color: var(--ink-3);
-  line-height: 1.65;
+  color: var(--fg-3);
+  line-height: 1.68;
   padding-left: 12px;
-  border-left: 2px solid var(--rule-2);
+  border-left: 2px solid var(--line-2);
+}
+
+.points--hit .point__detail {
+  border-left-color: var(--teal-edge);
+}
+
+.points--gap .point__detail {
+  border-left-color: var(--brand-edge);
 }
 
 .suggs__list {
@@ -873,10 +863,10 @@ onBeforeUnmount(() => controller?.abort())
 
 .sugg {
   display: grid;
-  grid-template-columns: 36px 1fr;
+  grid-template-columns: 40px 1fr;
   gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px dashed var(--rule);
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--line);
 }
 
 .sugg:last-child {
@@ -884,8 +874,10 @@ onBeforeUnmount(() => controller?.abort())
 }
 
 .sugg__idx {
-  color: var(--vermilion);
+  color: var(--brand);
+  font-weight: 600;
   padding-top: 2px;
+  font-variant-numeric: tabular-nums;
 }
 
 .sugg__main {
@@ -895,48 +887,55 @@ onBeforeUnmount(() => controller?.abort())
   min-width: 0;
 }
 
+/* 优先级标签改药丸 + 浅底（与 .tag 同一套语言），不再是方角细边框 */
 .pri {
   align-self: flex-start;
   display: inline-flex;
-  padding: 1px 7px;
-  border: 1px solid var(--rule-2);
-  border-radius: var(--r-sm);
+  padding: 2px 9px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
   font-family: var(--font-mono);
   font-size: 9.5px;
+  font-weight: 500;
   letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .pri--high {
-  border-color: var(--vermilion);
-  color: var(--vermilion);
-  background: var(--vermilion-wash);
+  border-color: transparent;
+  color: var(--brand-2);
+  background: var(--brand-soft);
+  box-shadow: inset 0 0 0 1px rgba(229, 72, 77, 0.15);
 }
 
 .pri--medium {
-  border-color: var(--amber);
-  color: var(--amber);
+  border-color: transparent;
+  color: var(--warn);
+  background: var(--warn-soft);
+  box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.2);
 }
 
 .pri--low {
-  border-color: var(--pine);
-  color: var(--pine);
-  background: var(--pine-wash);
+  border-color: transparent;
+  color: var(--teal-2);
+  background: var(--teal-soft);
+  box-shadow: inset 0 0 0 1px var(--teal-ring);
 }
 
 .sugg__problem {
   margin: 0;
   font-size: 13.5px;
-  color: var(--ink-2);
-  line-height: 1.65;
+  color: var(--fg-2);
+  line-height: 1.68;
 }
 
 .sugg__fix {
   margin: 0;
   font-size: 13px;
-  color: var(--ink-3);
-  line-height: 1.65;
+  color: var(--fg-3);
+  line-height: 1.68;
   padding-left: 12px;
-  border-left: 2px solid var(--rule-2);
+  border-left: 2px solid var(--teal-edge);
 }
 
 .sugg__fix::before {
@@ -944,7 +943,7 @@ onBeforeUnmount(() => controller?.abort())
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.06em;
-  color: var(--pine);
+  color: var(--teal);
 }
 
 @media (max-width: 760px) {

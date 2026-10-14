@@ -186,16 +186,27 @@ async function onSubmit() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 18px;
+  gap: 20px;
   height: 100%;
   padding: 32px 20px;
 }
 
 .gate__card {
+  position: relative;
   width: 100%;
-  max-width: 430px;
-  padding: 30px 30px 22px;
-  box-shadow: var(--shadow-2);
+  max-width: 424px;
+  padding: 34px 32px 24px;
+  overflow: hidden;
+  box-shadow: var(--sh-3);
+}
+
+/* 卡片顶沿一道品牌渐变，给整页一个视觉锚点 */
+.gate__card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: var(--brand-grad);
 }
 
 .gate__head {
@@ -204,79 +215,86 @@ async function onSubmit() {
   gap: 14px;
 }
 
-/* 与左栏品牌方块同一套语言：细描边方块 + 朱砂压角 */
 .gate__brand {
   position: relative;
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   flex: none;
-  border: 1.5px solid var(--ink);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
+  background: var(--brand-grad);
+  box-shadow: var(--sh-brand);
   overflow: hidden;
 }
 
 .gate__glyph {
   font-family: var(--font-mono);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
+  color: #fff;
 }
 
+/* 方块里的一层玻璃高光，比实心色块更有质感 */
 .gate__brandbar {
   position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 12px;
-  height: 12px;
-  background: var(--vermilion);
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.38), transparent 58%);
 }
 
 .gate__title h1 {
   margin: 2px 0 0;
-  font-size: 20px;
+  font-size: 21px;
   font-weight: 700;
-  letter-spacing: 0.01em;
+  letter-spacing: -0.015em;
+  color: var(--fg);
 }
 
 .gate__lede {
   margin: 18px 0 0;
   font-size: 12.5px;
-  line-height: 1.75;
-  color: var(--ink-3);
+  line-height: 1.78;
+  color: var(--fg-3);
 }
 
+/* 登录 / 注册：分段控件（浅底槽 + 白色滑块），比下划线 tab 更像现代 SaaS */
 .gate__tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0;
-  margin: 20px 0 18px;
-  border-bottom: 1px solid var(--rule);
+  gap: 4px;
+  margin: 22px 0 20px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
 }
 
 .gate__tab {
-  padding: 9px 0;
+  padding: 8px 0;
   border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.16em;
-  color: var(--ink-3);
+  border-radius: var(--r-sm);
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-3);
   cursor: pointer;
   transition:
-    color 0.15s ease,
-    border-color 0.15s ease;
+    background 0.18s var(--ease),
+    color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease);
 }
 
 .gate__tab:hover {
-  color: var(--ink);
+  color: var(--fg-2);
 }
 
 .gate__tab.is-on {
-  color: var(--vermilion);
-  border-bottom-color: var(--vermilion);
+  color: var(--brand-3);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
 }
 
 .gate__form {
@@ -291,27 +309,27 @@ async function onSubmit() {
 
 .field__label {
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: 7px;
 }
 
 .field__input {
   width: 100%;
-  padding: 9px 11px;
-  border: 1px solid var(--rule-2);
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
   border-radius: var(--r-sm);
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-body);
+  background: var(--surface);
+  color: var(--fg);
+  font-family: var(--font-sans);
   font-size: 14px;
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+    border-color 0.16s var(--ease),
+    box-shadow 0.16s var(--ease);
 }
 
 .field__input:focus {
   outline: none;
-  border-color: var(--vermilion);
-  box-shadow: 0 0 0 3px var(--vermilion-wash);
+  border-color: var(--brand);
+  box-shadow: 0 0 0 4px var(--brand-ring);
 }
 
 .field__input:disabled {
@@ -319,29 +337,28 @@ async function onSubmit() {
 }
 
 .field__input::placeholder {
-  color: var(--ink-3);
-  opacity: 0.75;
+  color: var(--fg-4);
 }
 
 .gate__error {
   margin: 2px 0 12px;
-  padding: 8px 11px;
-  border: 1px solid var(--vermilion);
-  border-left-width: 3px;
+  padding: 9px 12px;
+  border: 1px solid rgba(229, 72, 77, 0.3);
   border-radius: var(--r-sm);
-  background: var(--vermilion-wash);
-  color: var(--vermilion-2);
+  background: var(--brand-soft);
+  color: var(--brand-3);
   font-size: 12.5px;
 }
 
 .gate__submit {
   width: 100%;
   margin-top: 4px;
-  padding: 11px 16px;
+  padding: 12px 16px;
+  font-size: 14px;
 }
 
 .gate__foot {
-  margin-top: 20px;
+  margin-top: 22px;
 }
 
 .gate__foot .rule-x {
@@ -351,11 +368,11 @@ async function onSubmit() {
 .gate__foot p {
   margin: 0;
   text-align: center;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
 }
 
 .gate__note {
-  letter-spacing: 0.22em;
-  opacity: 0.6;
+  letter-spacing: 0.2em;
+  opacity: 0.65;
 }
 </style>

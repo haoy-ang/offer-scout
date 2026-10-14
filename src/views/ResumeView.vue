@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
-import { analyzeResume, type ResumeDiagnosis } from '@/api/client'
+import { computed, nextTick, ref } from 'vue'
 import { hhmmss } from '@/utils/markdown'
+import { cooldownSeconds } from '@/stores/cooldown'
+import { resetResume, runResume, stopResume, useResumeSession } from '@/stores/resume'
 
 /**
  * 简历诊断页。
  * <p>
- * 后端返回的是结构化的 {@link ResumeDiagnosis}，不是一段 Markdown 文本，
- * 所以这里不需要 MessageCard 渲染，而是把总分 / 维度 / 建议拆成三块档案式面板展示。
- * 这样比「让模型吐一段评测文字」更可读，也更好维护。
+ * 后端返回的是结构化结果，不是一段 Markdown 文本，所以这里不用 MessageCard 渲染，
+ * 而是把总分 / 维度 / 建议拆成三块档案式面板展示 —— 比「让模型吐一段评测文字」
+ * 更可读，也更好维护。
+ * <p>
+ * 状态（输入、结果、计时）来自模块级 store（见 `@/stores/resume`）：诊断一次要等十几秒，
+ * 状态留在组件实例里就会随切页清零、只能重跑。这里只留 UI 专用的 DOM 引用与拖拽态。
  */
 
 /** 优先级 → 展示文案 + 颜色档位。颜色语义：高=朱砂(要命)、中=赭石(注意)、低=松绿(可缓) */
@@ -18,24 +22,29 @@ const PRIORITY = {
   low: { label: '低优先', cls: 'pri--low' },
 } as const
 
-const file = ref<File | null>(null)
-const pastedText = ref('')
-const targetJob = ref('')
-const busy = ref(false)
-const result = ref<ResumeDiagnosis | null>(null)
-const error = ref('')
-const elapsed = ref(0)
-const dragging = ref(false)
-const reportTime = ref('')
+const { file, pastedText, targetJob, busy, result, error, stopped, elapsed, reportTime } =
+  useResumeSession()
 
+/** 限流冷却：剩余秒数 > 0 时把按钮禁住，并如实告诉用户还要等多久 */
+const cooldown = cooldownSeconds
+
+const dragging = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const bodyEl = ref<HTMLElement | null>(null)
 
-let ticker: number | undefined
+/**
+ * 前端就近拦截的超限提示。
+ * <p>
+ * 后端对上传体积的上限是 10MB，但那是"传到一半才打回"——用户得先白等一遍上传。
+ * 这里就地挡掉，代价只是一次比较。
+ */
+const MAX_PDF_BYTES = 10 * 1024 * 1024
+const fileError = ref('')
 
 const fileName = computed(() => file.value?.name ?? '')
 const hasInput = computed(() => !!file.value || pastedText.value.trim().length > 0)
-const hasOutput = computed(() => !!result.value || !!error.value)
+/** 「已停止」也算有过一次动作，不该再把空态引导摆出来 */
+const hasOutput = computed(() => !!result.value || !!error.value || stopped.value)
 
 /** 把总分映射成一句档位评语，避免只甩一个冷冰冰的数字 */
 const grade = computed(() => {
@@ -59,10 +68,21 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+/** 收下一个文件：先过体积这一关，不合格就留在原地并说明原因 */
+function acceptFile(picked: File | null | undefined) {
+  if (!picked) return
+  if (picked.size > MAX_PDF_BYTES) {
+    fileError.value = `这份 ${formatSize(picked.size)}，超过了 10 MB 的上限，换一份再试。`
+    file.value = null
+    return
+  }
+  fileError.value = ''
+  file.value = picked
+}
+
 function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement
-  const picked = input.files?.[0]
-  if (picked) file.value = picked
+  acceptFile(input.files?.[0])
   // 允许连续选择同一文件：清掉 value，否则再次选同一文件不触发 change
   input.value = ''
 }
@@ -75,26 +95,13 @@ function pickFile() {
 function dropFile(e: DragEvent) {
   dragging.value = false
   if (busy.value) return
-  const picked = e.dataTransfer?.files?.[0]
-  if (picked) file.value = picked
+  acceptFile(e.dataTransfer?.files?.[0])
 }
 
 function clearFile() {
   file.value = null
+  fileError.value = ''
   if (fileInput.value) fileInput.value.value = ''
-}
-
-function startTicker() {
-  elapsed.value = 0
-  const began = Date.now()
-  ticker = window.setInterval(() => {
-    elapsed.value = Math.floor((Date.now() - began) / 1000)
-  }, 500)
-}
-
-function stopTicker() {
-  if (ticker) window.clearInterval(ticker)
-  ticker = undefined
 }
 
 async function scrollToTop() {
@@ -103,47 +110,22 @@ async function scrollToTop() {
   if (node) node.scrollTop = 0
 }
 
+/**
+ * 跑一次诊断；成功出报告后回到顶部先看总分卡（原来的行为）。
+ * 状态流转、计时、请求都在 store 里 —— 视图只负责"滚到该看的位置"这件 UI 事。
+ */
 async function run() {
-  if (busy.value) return
-  if (!file.value && !pastedText.value.trim()) {
-    error.value = '请先上传一份 PDF 简历，或直接粘贴简历文本。'
-    return
-  }
+  await runResume()
+  if (!error.value && result.value) await scrollToTop()
+}
 
-  busy.value = true
-  result.value = null
-  error.value = ''
-  reportTime.value = ''
-  startTicker()
-
-  try {
-    result.value = await analyzeResume({
-      file: file.value,
-      text: pastedText.value.trim() || undefined,
-      targetJob: targetJob.value.trim() || undefined,
-    })
-    reportTime.value = hhmmss()
-    scrollToTop()
-  } catch (e) {
-    error.value = (e as Error).message || '诊断失败，请稍后重试。'
-  } finally {
-    busy.value = false
-    stopTicker()
-  }
+function stop() {
+  stopResume()
 }
 
 function reset() {
-  if (busy.value) return
-  file.value = null
-  pastedText.value = ''
-  targetJob.value = ''
-  result.value = null
-  error.value = ''
-  reportTime.value = ''
-  elapsed.value = 0
+  resetResume()
 }
-
-onBeforeUnmount(stopTicker)
 </script>
 
 <template>
@@ -161,7 +143,17 @@ onBeforeUnmount(stopTicker)
       </div>
       <div class="resume__acts">
         <span class="mono">
-          {{ busy ? '诊断中' : hasOutput ? '已出报告' : '待诊断' }}
+          {{
+            busy
+              ? '诊断中'
+              : result
+                ? '已出报告'
+                : stopped
+                  ? '已停止'
+                  : error
+                    ? '待诊断 · 有提示'
+                    : '待诊断'
+          }}
           <template v-if="busy"> · {{ elapsed }}s</template>
         </span>
         <button
@@ -213,6 +205,8 @@ onBeforeUnmount(stopTicker)
                 移除
               </button>
             </template>
+
+            <p v-if="fileError" class="dropzone__err">{{ fileError }}</p>
           </div>
 
           <!-- 右：粘贴文本 + 目标岗位 + 提交 -->
@@ -238,10 +232,24 @@ onBeforeUnmount(stopTicker)
             />
 
             <div class="input__submit">
-              <button class="btn" type="button" :disabled="busy || !hasInput" @click="run">
-                {{ busy ? '诊断中…' : '开始诊断' }}
+              <!-- 跑起来后按钮换成「停止」：这是全站最慢的动作之一（结构化输出失败会重试），
+                   没有喊停的口子，用户只能刷新页面 —— 而刷新会把材料一起清掉 -->
+              <button v-if="busy" class="btn btn--stop" type="button" @click="stop">停止</button>
+              <button
+                v-else
+                class="btn"
+                type="button"
+                :disabled="!hasInput || cooldown > 0"
+                @click="run"
+              >
+                开始诊断
               </button>
-              <span class="mono input__note">每次诊断 = 一次完整的大模型分析，每分钟限 5 次</span>
+              <span v-if="cooldown > 0" class="mono input__note input__note--warn">
+                触发限流了，{{ cooldown }} 秒后可再试
+              </span>
+              <span v-else class="mono input__note">
+                每次诊断 = 一次完整的大模型分析，每分钟限 5 次
+              </span>
             </div>
           </div>
         </div>
@@ -258,13 +266,16 @@ onBeforeUnmount(stopTicker)
 
       <!-- 结果 -->
       <template v-else>
-        <!-- 报错 -->
-        <section v-if="error" class="panel error rise">
+        <!-- 报错 / 用户主动停止：两者刻意分开措辞 —— 主动停下来不是失败，
+             用同一个红色警示框去套它，用户会以为自己把什么搞坏了 -->
+        <section v-if="error || stopped" class="panel rise" :class="stopped ? 'notice' : 'error'">
           <header class="panel__head">
-            <span class="tag">诊断失败</span>
+            <span class="tag">{{ stopped ? '已停止' : '诊断失败' }}</span>
             <span class="mono">{{ hhmmss() }}</span>
           </header>
-          <p class="error__msg">{{ error }}</p>
+          <p :class="stopped ? 'notice__msg' : 'error__msg'">
+            {{ stopped ? '你手动停了下来。材料还在，点「开始诊断」可以重来。' : error }}
+          </p>
         </section>
 
         <!-- 总分卡 -->
@@ -349,19 +360,21 @@ onBeforeUnmount(stopTicker)
   flex-direction: column;
 }
 
+/* 工具条：与对话页 / 作战规划页同一套（白底 + 同一内边距） */
 .resume__bar {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 9px 26px;
-  border-bottom: 1px solid var(--rule);
+  padding: 10px 28px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.5);
 }
 
 .resume__id {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 9px;
   min-width: 0;
 }
@@ -369,11 +382,12 @@ onBeforeUnmount(stopTicker)
 .resume__idval {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--ink-2);
-  background: var(--paper-3);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-sm);
-  padding: 1px 7px;
+  font-weight: 500;
+  color: var(--fg-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  padding: 2px 8px;
   max-width: 56ch;
   white-space: nowrap;
   overflow: hidden;
@@ -393,13 +407,15 @@ onBeforeUnmount(stopTicker)
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: 24px 26px 40px;
+  padding: 28px 28px 36px;
+  /* 与对话页共用同一条 900px 内容轴：宽屏上不会一路贴到最右边 */
+  padding-left: max(28px, calc((100% - 900px) / 2));
+  padding-right: max(28px, calc((100% - 900px) / 2));
 }
 
 /* ---------- 输入面板 ---------- */
 
 .input {
-  max-width: 960px;
   width: 100%;
 }
 
@@ -407,7 +423,7 @@ onBeforeUnmount(stopTicker)
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 22px;
-  padding: 18px;
+  padding: 20px;
 }
 
 .input__label {
@@ -415,31 +431,33 @@ onBeforeUnmount(stopTicker)
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--ink-3);
+  color: var(--fg-3);
 }
 
 .input__ta,
 .input__text {
   width: 100%;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-body);
+  background: var(--surface-2);
+  color: var(--fg);
+  font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.65;
   padding: 10px 12px;
   resize: vertical;
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+    border-color 0.15s var(--ease),
+    box-shadow 0.15s var(--ease),
+    background 0.15s var(--ease);
 }
 
 .input__ta:focus,
 .input__text:focus {
   outline: none;
-  border-color: var(--vermilion);
-  box-shadow: 0 0 0 3px var(--vermilion-wash);
+  border-color: var(--brand);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--brand-ring);
 }
 
 .input__text {
@@ -462,10 +480,16 @@ onBeforeUnmount(stopTicker)
 }
 
 .input__note {
-  color: var(--ink-3);
+  color: var(--fg-3);
 }
 
-/* 上传区 */
+/* 限流冷却不是错误，但也得让用户一眼看见「现在点不动、还要等几秒」 */
+.input__note--warn {
+  color: var(--warn);
+}
+
+/* 上传区：拖放区保留虚线（这是「可拖入」的通用视觉语言），
+   只把圆角与底色对齐新皮肤，不再用旧「档案」调性的小圆角灰底 */
 .dropzone {
   display: flex;
   flex-direction: column;
@@ -473,26 +497,26 @@ onBeforeUnmount(stopTicker)
   justify-content: center;
   gap: 7px;
   text-align: center;
-  padding: 26px 18px;
-  border: 1.5px dashed var(--rule-2);
-  border-radius: var(--r-md);
-  background: var(--paper);
+  padding: 28px 18px;
+  border: 1.5px dashed var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
   cursor: pointer;
   transition:
-    border-color 0.16s ease,
-    background 0.16s ease;
+    border-color 0.16s var(--ease),
+    background 0.16s var(--ease);
 }
 
 .dropzone:hover,
 .dropzone.is-drag {
-  border-color: var(--vermilion);
-  background: var(--vermilion-wash);
+  border-color: var(--brand);
+  background: var(--brand-soft);
 }
 
 .dropzone.has-file {
   border-style: solid;
-  border-color: var(--pine);
-  background: var(--pine-wash);
+  border-color: var(--teal);
+  background: var(--teal-soft);
 }
 
 .dropzone__glyph {
@@ -500,69 +524,83 @@ onBeforeUnmount(stopTicker)
   font-size: 22px;
   font-weight: 700;
   letter-spacing: 0.06em;
-  color: var(--ink-3);
+  color: var(--fg-3);
 }
 
 .dropzone__glyph--ok {
-  color: var(--pine);
+  color: var(--teal);
 }
 
 .dropzone__title {
   margin: 0;
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--fg);
   overflow-wrap: anywhere;
 }
 
 .dropzone__hint {
   margin: 0;
   font-size: 11.5px;
-  color: var(--ink-3);
+  color: var(--fg-3);
+}
+
+/* 本地拦截（体积超限）就写在拖放区里，配上 --warn 让它跟上面的说明区分开 */
+.dropzone__err {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--warn);
 }
 
 /* ---------- 空态 ---------- */
 
 .intro {
-  max-width: 960px;
   width: 100%;
 }
 
 .intro .rule-x {
-  margin-bottom: 16px;
+  margin: 0 0 16px;
 }
 
 .intro__desc {
   margin: 0;
-  max-width: 72ch;
-  color: var(--ink-3);
-  font-size: 13.5px;
+  max-width: 74ch;
+  color: var(--fg-3);
+  font-size: 14px;
+  line-height: 1.75;
 }
 
 .intro__desc strong {
-  color: var(--ink);
+  color: var(--fg);
 }
 
 /* ---------- 错误 ---------- */
 
 .error {
-  max-width: 960px;
   width: 100%;
 }
 
 .error__msg {
   margin: 0;
   padding: 18px;
-  color: var(--vermilion-2);
+  color: var(--brand-2);
+  font-size: 13.5px;
+}
+
+/* 「已停止」用中性说明框，而不是红色的失败框 —— 主动停下来不是错误 */
+.notice__msg {
+  margin: 0;
+  padding: 18px;
+  color: var(--fg-2);
   font-size: 13.5px;
 }
 
 /* ---------- 总分卡 ---------- */
 
 .scorecard {
-  max-width: 960px;
   width: 100%;
-  padding: 22px;
+  padding: 24px;
 }
 
 .scorecard__main {
@@ -584,25 +622,26 @@ onBeforeUnmount(stopTicker)
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.03em;
-  color: var(--ink);
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
 }
 
 .scorecard__val.score--pine {
-  color: var(--pine);
+  color: var(--teal);
 }
 
 .scorecard__val.score--amber {
-  color: var(--amber);
+  color: var(--warn);
 }
 
 .scorecard__val.score--ver {
-  color: var(--vermilion);
+  color: var(--brand);
 }
 
 .scorecard__unit {
   font-family: var(--font-mono);
   font-size: 13px;
-  color: var(--ink-3);
+  color: var(--fg-3);
 }
 
 .scorecard__meta {
@@ -615,28 +654,28 @@ onBeforeUnmount(stopTicker)
 .scorecard__summary {
   margin: 16px 0 0;
   padding-top: 16px;
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--line);
   font-size: 14.5px;
-  line-height: 1.75;
-  color: var(--ink-2);
+  line-height: 1.78;
+  color: var(--fg-2);
 }
 
 /* ---------- 维度 ---------- */
 
 .dims {
-  max-width: 960px;
   width: 100%;
 }
 
 .dims__list {
   list-style: none;
   margin: 0;
-  padding: 6px 18px 14px;
+  padding: 8px 20px 16px;
 }
 
+/* 分隔线改实线：虚线是旧「档案」调性，在现在的皮肤里显得碎 */
 .dim {
-  padding: 12px 0;
-  border-bottom: 1px dashed var(--rule);
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .dim:last-child {
@@ -653,64 +692,65 @@ onBeforeUnmount(stopTicker)
 .dim__name {
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--fg);
 }
 
 .dim__score {
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .dim__score.dim--pine {
-  color: var(--pine);
+  color: var(--teal);
 }
 
 .dim__score.dim--amber {
-  color: var(--amber);
+  color: var(--warn);
 }
 
 .dim__score.dim--ver {
-  color: var(--vermilion);
+  color: var(--brand);
 }
 
 .dim__track {
   height: 6px;
-  margin: 7px 0 5px;
-  background: var(--paper-3);
-  border-radius: 3px;
+  margin: 8px 0 6px;
+  background: var(--surface-2);
+  border-radius: var(--r-pill);
   overflow: hidden;
 }
 
 .dim__fill {
   display: block;
   height: 100%;
-  border-radius: 3px;
-  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  border-radius: var(--r-pill);
+  transition: width 0.6s var(--ease);
 }
 
 .dim__fill.dim--pine {
-  background: var(--pine);
+  background: var(--teal);
 }
 
 .dim__fill.dim--amber {
-  background: var(--amber);
+  background: var(--warn);
 }
 
 .dim__fill.dim--ver {
-  background: var(--vermilion);
+  background: var(--brand);
 }
 
 .dim__comment {
   margin: 0;
   font-size: 12.5px;
-  color: var(--ink-3);
+  line-height: 1.65;
+  color: var(--fg-3);
 }
 
 /* ---------- 建议 ---------- */
 
 .suggs {
-  max-width: 960px;
   width: 100%;
 }
 
@@ -722,10 +762,10 @@ onBeforeUnmount(stopTicker)
 
 .sugg {
   display: grid;
-  grid-template-columns: 36px 1fr;
+  grid-template-columns: 40px 1fr;
   gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px dashed var(--rule);
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--line);
 }
 
 .sugg:last-child {
@@ -733,8 +773,10 @@ onBeforeUnmount(stopTicker)
 }
 
 .sugg__idx {
-  color: var(--vermilion);
+  color: var(--brand);
+  font-weight: 600;
   padding-top: 2px;
+  font-variant-numeric: tabular-nums;
 }
 
 .sugg__main {
@@ -744,48 +786,55 @@ onBeforeUnmount(stopTicker)
   min-width: 0;
 }
 
+/* 优先级标签改药丸 + 浅底（与 .tag 同一套语言），不再是方角细边框 */
 .pri {
   align-self: flex-start;
   display: inline-flex;
-  padding: 1px 7px;
-  border: 1px solid var(--rule-2);
-  border-radius: var(--r-sm);
+  padding: 2px 9px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
   font-family: var(--font-mono);
   font-size: 9.5px;
+  font-weight: 500;
   letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .pri--high {
-  border-color: var(--vermilion);
-  color: var(--vermilion);
-  background: var(--vermilion-wash);
+  border-color: transparent;
+  color: var(--brand-2);
+  background: var(--brand-soft);
+  box-shadow: inset 0 0 0 1px rgba(229, 72, 77, 0.15);
 }
 
 .pri--medium {
-  border-color: var(--amber);
-  color: var(--amber);
+  border-color: transparent;
+  color: var(--warn);
+  background: var(--warn-soft);
+  box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.2);
 }
 
 .pri--low {
-  border-color: var(--pine);
-  color: var(--pine);
-  background: var(--pine-wash);
+  border-color: transparent;
+  color: var(--teal-2);
+  background: var(--teal-soft);
+  box-shadow: inset 0 0 0 1px var(--teal-ring);
 }
 
 .sugg__problem {
   margin: 0;
   font-size: 13.5px;
-  color: var(--ink-2);
-  line-height: 1.65;
+  color: var(--fg-2);
+  line-height: 1.68;
 }
 
 .sugg__fix {
   margin: 0;
   font-size: 13px;
-  color: var(--ink-3);
-  line-height: 1.65;
+  color: var(--fg-3);
+  line-height: 1.68;
   padding-left: 12px;
-  border-left: 2px solid var(--rule-2);
+  border-left: 2px solid var(--teal-edge);
 }
 
 .sugg__fix::before {
@@ -793,7 +842,7 @@ onBeforeUnmount(stopTicker)
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.06em;
-  color: var(--pine);
+  color: var(--teal);
 }
 
 @media (max-width: 760px) {
