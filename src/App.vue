@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SideRail from '@/components/SideRail.vue'
 import { logout as logoutApi, me } from '@/api/client'
 import { clearSession, currentUser, isLoggedIn, setUser } from '@/stores/session'
+import { clearAllSessions } from '@/stores/teardown'
 import { hhmmss } from '@/utils/markdown'
 
 const route = useRoute()
@@ -12,7 +13,11 @@ const router = useRouter()
 /** 登录页自成一套版式，不套左栏 + 顶栏的外壳 */
 const bare = computed(() => route.meta.bare === true)
 
-const no = computed(() => (route.meta.no as string) ?? '--')
+/*
+ * 顶栏不再显示「§ 章节编号」。
+ * meta.no 现在只作为左栏导航的筛选与排序依据存在（见 router/index.ts），不呈现给用户 ——
+ * 所以这里也不需要读它了。
+ */
 const label = computed(() => (route.meta.label as string) ?? '')
 const hint = computed(() => (route.meta.hint as string) ?? '')
 
@@ -71,11 +76,36 @@ async function onLogout() {
   } catch {
     // 网络异常时依然要能把人放走，不能因为"登出接口没调通"就卡在登录态
   } finally {
+    // 各功能页的状态都活在模块作用域的 store 里（这是"切页不丢"的代价），
+    // 登出时必须一起清掉 —— 否则换个账号登进来，上一任用户的 Agent 报告、
+    // 简历诊断结果还挂在页面上。凭证和业务状态清理放在一起，别分两处。
+    //
+    // 这里显式调一次只是一道保险：clearSession() 会把 isLoggedIn 变成 false，
+    // 下面的 watcher 同样会触发清理。两者都幂等，重复调没有副作用。
+    clearAllSessions()
+
     clearSession()
     loggingOut.value = false
     await router.replace({ name: 'login' })
   }
 }
+
+/**
+ * 登录态一旦变成「未登录」，就把所有业务状态清掉。
+ * <p>
+ * 这是本文件里最重要的一行保险。「登出」按钮只是掉登录态的其中一条路 ——
+ * token 过期 12 小时、被服务端拉黑、在别处登出，走的是 {@code api/client.ts} 里
+ * 的 401 处理，它只会 {@code clearSession()}，不会顺路去清那几个功能页的 store。
+ * <p>
+ * 把清理挂在「登录态」而不是「某个按钮」上，就只有这一个出口了：
+ * 谁把 isLoggedIn 变成 false，谁就自动触发清理，将来新增掉线路径也不会漏。
+ * <p>
+ * 注意这个 watcher 只监听变化（不是 immediate）—— 首次加载时可能本来就是未登录，
+ * 那属于正常初始状态，没有东西需要清。
+ */
+watch(isLoggedIn, (logged) => {
+  if (!logged) clearAllSessions()
+})
 
 onMounted(() => {
   timer = window.setInterval(() => (clock.value = hhmmss()), 1000)
@@ -100,7 +130,6 @@ onBeforeUnmount(() => {
         <div class="topbar__crumb">
           <span class="mono mono--ink">OFFER-SCOUT</span>
           <span class="topbar__slash">/</span>
-          <span class="sec-no">§ {{ no }}</span>
           <span class="topbar__label">{{ label }}</span>
         </div>
 
@@ -109,7 +138,7 @@ onBeforeUnmount(() => {
         <div class="topbar__meta">
           <button
             class="tag"
-            :class="{ 'tag--live': health === 'up' }"
+            :class="{ 'tag--pine': health === 'up' }"
             :title="healthText"
             @click="probe"
           >
@@ -136,7 +165,13 @@ onBeforeUnmount(() => {
 
       <main class="stage">
         <RouterView v-slot="{ Component }">
-          <component :is="Component" :key="route.path" />
+          <!--
+            用 route.name 而不是 route.path 当 key。
+            两者在本项目里当前都是"一路由一值"，行为等价；但 name 才是路由记录的稳定标识：
+            将来若某个页面换成 alias / query 承载子模式（path 会变、name 不变），
+            就不会因为 path 变化把组件整个重挂、连带清空组件内状态。
+          -->
+          <component :is="Component" :key="route.name" />
         </RouterView>
       </main>
     </div>
@@ -149,6 +184,14 @@ onBeforeUnmount(() => {
   z-index: 2;
   display: grid;
   grid-template-columns: var(--rail-w) 1fr;
+  /*
+   * 必须显式声明行轨道，且最小值为 0。
+   * 只写 grid-template-columns 时，行轨道是隐式的 `auto`，其最小尺寸是 `auto` —— 也就是
+   * "不小于内容高度"。于是内容一高，整行就被撑高，`.main{height:100%}` 又是相对这一行解析的，
+   * 高度链一路被拉长，最后 `.main` 从"视口高"变成"内容高"，里层滚动容器再也等不到溢出 → 页面不滚。
+   * minmax(0, 1fr) 把行的最小尺寸压到 0、最大值锁死在可用空间，高度链就稳在视口高以内了。
+   */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
 }
 
@@ -159,15 +202,16 @@ onBeforeUnmount(() => {
   height: 100%;
 }
 
+/* 顶栏：白底毛玻璃。别改成纯白 —— 透出来的是背景那两团品牌光晕。 */
 .topbar {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 18px;
-  padding: 14px 26px;
-  border-bottom: 1px solid var(--rule);
-  background: rgba(242, 237, 227, 0.72);
-  backdrop-filter: blur(8px);
+  padding: 13px 28px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(14px) saturate(1.5);
   flex: none;
 }
 
@@ -179,21 +223,21 @@ onBeforeUnmount(() => {
 }
 
 .topbar__slash {
-  color: var(--rule-2);
+  color: var(--fg-4);
   font-family: var(--font-mono);
 }
 
 .topbar__label {
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--ink);
+  letter-spacing: -0.01em;
+  color: var(--fg);
 }
 
 .topbar__hint {
   margin: 0;
   font-size: 12.5px;
-  color: var(--ink-3);
+  color: var(--fg-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -201,7 +245,7 @@ onBeforeUnmount(() => {
 
 .topbar__hint::before {
   content: '— ';
-  color: var(--rule-2);
+  color: var(--fg-4);
 }
 
 .topbar__meta {
@@ -213,47 +257,48 @@ onBeforeUnmount(() => {
 
 .topbar__clock {
   font-size: 11px;
-  color: var(--ink-2);
+  color: var(--fg-2);
   font-variant-numeric: tabular-nums;
 }
 
+/* 后端探活指示灯 */
 .beat {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--ink-3);
+  background: var(--fg-4);
 }
 
 .beat[data-state='up'] {
-  background: var(--vermilion);
-  animation: blink 1.6s steps(1) infinite;
+  background: var(--teal);
+  animation: pulse-ring 2.2s var(--ease) infinite;
 }
 
 .beat[data-state='down'] {
-  background: var(--amber);
+  background: var(--warn);
 }
 
-/* 当前用户：方块首字 + 昵称 */
+/* 当前用户：品牌渐变方块首字 + 昵称 */
 .who {
   display: flex;
   align-items: center;
   gap: 8px;
   padding-left: 14px;
-  border-left: 1px solid var(--rule);
+  border-left: 1px solid var(--line);
 }
 
 .who__avatar {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--ink);
-  border-radius: var(--r-sm);
-  background: var(--ink);
-  color: var(--paper-2);
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-xs);
+  background: var(--brand-grad);
+  color: #fff;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
+  box-shadow: var(--sh-brand);
 }
 
 .who__name {
@@ -262,7 +307,7 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--fg);
 }
 
 .stage {
