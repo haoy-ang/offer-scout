@@ -1,0 +1,19 @@
+# 编辑器统一约定：让 IDE 和命令行的行为一致，避免"我这儿好好的、你那儿一堆 diff"。
+# 注意：这个文件只约束**新写入**的内容，不会去重排已有代码。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Markdown 里的行尾空格是"强制换行"的语法，不能被自动删掉
+[*.md]
+trim_trailing_whitespace = false
+
+# Windows 脚本必须 CRLF
+[*.{cmd,bat}]
+end_of_line = crlf

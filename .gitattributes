@@ -1,0 +1,25 @@
+# 换行符统一策略
+#
+# 背景：本机全局 core.autocrlf=true，仓库里存的是 LF，检出到工作区变成 CRLF，
+# 于是每次 `git add` 都会刷一排 "LF will be replaced by CRLF" 警告。
+# 这里显式声明"源码一律按 LF 存"，警告就消失了，也让不同系统协作时行为一致。
+
+* text=auto eol=lf
+
+# Windows 批处理脚本必须保留 CRLF，否则 cmd 解析会出问题
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制文件不做任何换行符转换（否则文件会被改坏）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# 锁文件由工具生成，参与 diff 没有意义
+package-lock.json -diff
