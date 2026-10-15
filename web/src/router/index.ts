@@ -112,7 +112,8 @@ router.beforeEach((to) => {
  */
 const CHUNK_RETRY_FLAG = 'offerscout.chunk-reloaded'
 
-const CHUNK_FAILURE_RE = /Loading chunk|dynamically imported module|Importing a module script failed/i
+const CHUNK_FAILURE_RE =
+  /Loading chunk|dynamically imported module|Importing a module script failed/i
 
 router.onError((error, to) => {
   const message = error instanceof Error ? error.message : String(error)

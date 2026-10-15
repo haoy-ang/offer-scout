@@ -76,13 +76,13 @@ function onStop() {
           </button>
         </div>
       </div>
-    <div class="composer__foot">
-      <span class="mono">ENTER 发送 · SHIFT+ENTER 换行</span>
-      <span v-if="cooldown > 0" class="mono composer__cool">
-        触发限流，{{ cooldown }} 秒后可重试
-      </span>
-      <span class="mono">{{ text.length }} 字</span>
-    </div>
+      <div class="composer__foot">
+        <span class="mono">ENTER 发送 · SHIFT+ENTER 换行</span>
+        <span v-if="cooldown > 0" class="mono composer__cool">
+          触发限流，{{ cooldown }} 秒后可重试
+        </span>
+        <span class="mono">{{ text.length }} 字</span>
+      </div>
     </div>
   </div>
 </template>

@@ -61,9 +61,7 @@ const cooldown = cooldownSeconds
 const typeLabel = computed(() => TYPES.find((t) => t.key === type.value)?.label ?? '技术面')
 /** 已问答轮数 = 候选人回答的次数 */
 const answered = computed(() => turns.value.filter((t) => t.role === 'user').length)
-const canStart = computed(
-  () => !busy.value && cooldown.value === 0 && role.value.trim().length > 0
-)
+const canStart = computed(() => !busy.value && cooldown.value === 0 && role.value.trim().length > 0)
 
 async function scrollToEnd() {
   await nextTick()
@@ -228,7 +226,9 @@ function restart() {
             <span v-if="cooldown > 0" class="mono setup__note setup__note--warn">
               触发限流了，{{ cooldown }} 秒后可再试
             </span>
-            <span v-else class="mono setup__note">一场面试 = 多轮追问，结束后由同一份记录生成复盘</span>
+            <span v-else class="mono setup__note"
+              >一场面试 = 多轮追问，结束后由同一份记录生成复盘</span
+            >
           </div>
         </section>
 

@@ -32,7 +32,8 @@ const ICONS: Record<string, string> = {
   archive: 'M3 4h18v3.5H3zM5 7.5h14V19a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2zM10 12h4',
   resume: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4',
   match: 'M8 4 4 8l4 4M4 8h9M16 20l4-4-4-4M20 16h-9',
-  interview: 'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM19 11a7 7 0 0 1-14 0M12 18v3M8.5 21h7',
+  interview:
+    'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM19 11a7 7 0 0 1-14 0M12 18v3M8.5 21h7',
 }
 
 function iconOf(name: string) {
