@@ -1,4 +1,4 @@
-# Offer 侦察兵 · 前端（offer-scout-web）
+# Offer 侦察兵 · 前端（web/）
 
 > Offer 侦察兵（`offer-scout`）的 Web 客户端 —— Vue 3 + Vite + TypeScript。
 
@@ -8,7 +8,7 @@
 ![ESLint](https://img.shields.io/badge/ESLint-10-4B32C3?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
 
-后端仓库为 `offer-scout`（Java 21 + Spring Boot 3.4 + Spring AI）。**前端必须配合后端运行**，
+后端在同一仓库的 `server/` 目录（Java 21 + Spring Boot 3.4 + Spring AI）。**前端必须配合后端运行**，
 所有接口都走 `/api`，开发期由 Vite 代理到 `localhost:8124`。
 
 ## 页面
@@ -31,7 +31,7 @@
 ```bash
 npm install
 
-# 先启动后端（另一个仓库），监听 8124
+# 先启动后端（同仓库 server/ 目录），监听 8124
 npm run dev          # 默认 5173，通过 Vite 代理访问 /api
 ```
 
@@ -44,7 +44,7 @@ npm run format:check # Prettier 格式检查
 npm run build        # 产物构建
 ```
 
-CI（`.github/workflows/ci.yml`）会依次跑上面这四步。顺序刻意**由快到慢**：类型检查最先失败时，
+CI（`.github/workflows/frontend-ci.yml`，在仓库根目录）会依次跑上面这四步。顺序刻意**由快到慢**：类型检查最先失败时，
 不必等一次完整构建才知道哪里错了。
 
 ## 几个刻意的设计

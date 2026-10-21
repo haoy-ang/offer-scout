@@ -10,7 +10,7 @@
 ![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
 
 **状态**：功能主干已完成 —— 后端单测 47 个全过（含真实模型集成测试）；测试按「依赖什么外部服务」分三档，CI 流水线已就位。
-配套前端在独立仓库 `offer-scout-web`（Vue 3 + Vite + TS）。
+配套前端在同一仓库的 `web/` 目录（Vue 3 + Vite + TS）。
 
 ## 项目定位
 
@@ -44,7 +44,7 @@
 - Redis 8（接口限流 + 检索结果缓存 + JWT 登出黑名单）
 - JWT（jjwt 0.12）+ BCrypt 密码哈希（只引 `spring-security-crypto`，不引整套 Spring Security）
 - SSE 流式输出
-- Vue 3 + Vite（前端，独立仓库 `offer-scout-web`）
+- Vue 3 + Vite（前端，见同仓库 `web/`）
 
 ## 接口一览
 
@@ -93,12 +93,12 @@
 
 ```
 document/
-├── 小林coding-后端面经汇总-Java方向.md   # 50 家公司的后端面经真题（约 1000+ 片段）
+├── 后端面经汇总-Java方向.md              # 50 家公司的后端面经真题（约 1000+ 片段）
 ├── Java后端岗位JD汇总-2027校招.md        # 15 条 2027 届真实岗位 JD，按方向分三档
 └── 技术简历写法精要.md                   # 简历写法与面试追问链条，按诊断单条上限拆节
 ```
 
-> 面经素材来自第三方（小林coding 等），仅本地学习使用、**不随仓库分发**（见 `.gitignore`）。
+> 面经素材为第三方整理内容，仅本地学习使用、**不随仓库分发**（见 `.gitignore`）。
 > 克隆后如需完整的知识库检索体验，请自行补充一份同名文件；仓库内自制的 JD 与简历写法素材可直接使用。
 
 **向量库缓存**：首次启动会对全部片段调用 Embedding 接口并落盘到 `.vector-cache/`。
@@ -495,13 +495,12 @@ offer-scout/
 │   ├── config/                      安全 / 记忆 / MVC 拦截器 / Schema 迁移等配置
 │   ├── rag/                         知识库加载 + 向量库配置
 │   ├── tools/                       AI 可调用的工具（知识库检索 / 时间 / 终止）
-│   ├── agent/                       ReAct 自主规划智能体
-│   │   ├── BaseAgent.java           状态机 + 执行循环
-│   │   ├── ReActAgent.java          think / act 抽象
-│   │   ├── ToolCallAgent.java       工具调用的 think / act 实现
-│   │   ├── OfferScoutAgent.java     具体求职 Agent（prototype 作用域）
-│   │   └── model/AgentState.java    代理状态枚举
-│   └── advisor/                     自定义 Advisor（日志、增强）
+│   └── agent/                       ReAct 自主规划智能体
+│       ├── BaseAgent.java           状态机 + 执行循环
+│       ├── ReActAgent.java          think / act 抽象
+│       ├── ToolCallAgent.java       工具调用的 think / act 实现
+│       ├── OfferScoutAgent.java     具体求职 Agent（prototype 作用域）
+│       └── model/AgentState.java    代理状态枚举
 └── src/main/resources/
     ├── application.yml              主配置
     ├── application-local.yml        本地配置（含密钥与数据库密码，不入库）
@@ -509,7 +508,7 @@ offer-scout/
     └── document/                    知识库原始文档
 ```
 
-前端 `offer-scout-web/src/`：
+前端 `web/src/`：
 
 ```
 ├── api/client.ts        统一接口封装（带凭证、401 处理、SSE 解析）

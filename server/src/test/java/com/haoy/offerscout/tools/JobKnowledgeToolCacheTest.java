@@ -76,7 +76,7 @@ class JobKnowledgeToolCacheTest {
     @DisplayName("同一个问题问第二遍：只查一次向量库")
     void secondIdenticalSearchHitsCache() {
         when(vectorStore.similaritySearch(any(SearchRequest.class)))
-                .thenReturn(List.of(doc("MySQL 索引失效的常见场景……", "小林coding-后端面经汇总-Java方向.md")));
+                .thenReturn(List.of(doc("MySQL 索引失效的常见场景……", "后端面经汇总-Java方向.md")));
 
         JobKnowledgeTool tool = tool();
         String first = tool.searchJobKnowledge("MySQL 索引失效", "interview");
