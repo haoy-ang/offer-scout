@@ -3,6 +3,7 @@ package com.haoy.offerscout.resume;
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.common.BusinessException;
 import com.haoy.offerscout.common.StructuredOutputRetry;
+import com.haoy.offerscout.common.TextTruncator;
 import com.haoy.offerscout.common.TimeContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -10,6 +11,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -43,6 +45,9 @@ public class ResumeService {
     private final ChatClient chatClient;
     private final VectorStore vectorStore;
     private final ResumeParser resumeParser;
+
+    @Value("${offer-scout.rag.similarity-threshold:0.0}")
+    private double similarityThreshold = 0.0;
 
     public ResumeService(ChatModel chatModel, VectorStore jobVectorStore, ResumeParser resumeParser) {
         // 裸 Client：没有 system 默认值、没有记忆 Advisor，一切都在 analyze() 里现拼
@@ -86,7 +91,7 @@ public class ResumeService {
             List<Document> docs = vectorStore.similaritySearch(SearchRequest.builder()
                     .query(query)
                     .topK(4)
-                    .similarityThreshold(0.0)
+                    .similarityThreshold(similarityThreshold)
                     .build());
             if (docs == null || docs.isEmpty()) {
                 return "（知识库暂未检索到简历写法资料，请基于通用简历标准诊断）";
@@ -95,9 +100,7 @@ public class ResumeService {
             int i = 1;
             for (Document doc : docs) {
                 String text = doc.getText() == null ? "" : doc.getText().replaceAll("\\s+", " ").trim();
-                if (text.length() > 800) {
-                    text = text.substring(0, 800) + "…";
-                }
+                text = TextTruncator.truncateGracefully(text, 800, "…");
                 sb.append("【参考 ").append(i++).append("｜")
                         .append(doc.getMetadata().getOrDefault("filename", "未知"))
                         .append("】\n").append(text).append('\n');

@@ -1,6 +1,7 @@
 package com.haoy.offerscout.resume;
 
 import com.haoy.offerscout.common.BusinessException;
+import com.haoy.offerscout.common.TextTruncator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.pdf.PagePdfDocumentReader;
@@ -37,6 +38,9 @@ public class ResumeParser {
     /** 简历文本太长就截断 —— 防止有人传一本 300 页的书把上下文撑爆 */
     private static final int MAX_CHARS = 15000;
 
+    /** 简历最大允许页数（普通技术简历 1~2 页，最多放宽至 10 页，防超长 PDF 拖死解析线程与内存） */
+    private static final int MAX_PAGES = 10;
+
     /**
      * 解析 PDF 并提取纯文本。
      *
@@ -57,7 +61,11 @@ public class ResumeParser {
             PagePdfDocumentReader reader = new PagePdfDocumentReader(new FileSystemResource(temp), config);
 
             List<Document> pages = reader.get();
-            String text = pages.stream()
+            if (pages != null && pages.size() > MAX_PAGES) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST,
+                        "简历页数超出上限（当前 " + pages.size() + " 页，最大支持 " + MAX_PAGES + " 页），请确认上传的是正确的简历文件");
+            }
+            String text = pages == null ? "" : pages.stream()
                     .map(Document::getText)
                     .filter(s -> s != null && !s.isBlank())
                     .reduce("", (a, b) -> a + "\n" + b)
@@ -71,7 +79,7 @@ public class ResumeParser {
             }
             log.info("简历 PDF 解析成功：{} 页，提取 {} 字符", pages.size(), text.length());
 
-            return text.length() > MAX_CHARS ? text.substring(0, MAX_CHARS) : text;
+            return TextTruncator.truncateGracefully(text, MAX_CHARS, "…（内容超长已截断）");
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {

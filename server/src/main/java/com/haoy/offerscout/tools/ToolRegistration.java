@@ -25,9 +25,12 @@ public class ToolRegistration {
      * 而不是让 Spring AI 在调用 ChatClient 时自动执行。
      */
     @Bean
-    public ToolCallback[] offerScoutTools(VectorStore jobVectorStore, RedisCacheService cacheService) {
+    public ToolCallback[] offerScoutTools(VectorStore jobVectorStore,
+                                          RedisCacheService cacheService,
+                                          @org.springframework.beans.factory.annotation.Value("${offer-scout.rag.similarity-threshold:0.0}")
+                                          double similarityThreshold) {
         return ToolCallbacks.from(
-                new JobKnowledgeTool(jobVectorStore, cacheService),
+                new JobKnowledgeTool(jobVectorStore, cacheService, similarityThreshold),
                 new DateTimeTool(),
                 new TerminateTool()
         );

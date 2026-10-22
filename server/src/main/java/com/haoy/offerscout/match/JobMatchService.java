@@ -3,6 +3,7 @@ package com.haoy.offerscout.match;
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.common.BusinessException;
 import com.haoy.offerscout.common.StructuredOutputRetry;
+import com.haoy.offerscout.common.TextTruncator;
 import com.haoy.offerscout.common.TimeContext;
 import com.haoy.offerscout.resume.ResumeParser;
 import lombok.extern.slf4j.Slf4j;
@@ -64,8 +65,7 @@ public class JobMatchService {
             return resumeParser.extractText(file);
         }
         if (StrUtil.isNotBlank(pastedText)) {
-            String text = pastedText.trim();
-            return text.length() > MAX_RESUME_CHARS ? text.substring(0, MAX_RESUME_CHARS) : text;
+            return TextTruncator.truncateGracefully(pastedText.trim(), MAX_RESUME_CHARS, "…（已截断）");
         }
         throw new BusinessException(HttpStatus.BAD_REQUEST, "请上传简历文件，或直接粘贴简历文本。");
     }
@@ -74,8 +74,7 @@ public class JobMatchService {
         if (StrUtil.isBlank(jd)) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "请粘贴目标岗位的 JD（职位描述）。");
         }
-        String text = jd.trim();
-        return text.length() > MAX_JD_CHARS ? text.substring(0, MAX_JD_CHARS) : text;
+        return TextTruncator.truncateGracefully(jd.trim(), MAX_JD_CHARS, "…（已截断）");
     }
 
     private JobMatch match(String resumeText, String jdText) {

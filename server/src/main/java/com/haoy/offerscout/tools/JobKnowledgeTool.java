@@ -2,6 +2,7 @@ package com.haoy.offerscout.tools;
 
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.cache.RedisCacheService;
+import com.haoy.offerscout.common.TextTruncator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.tool.annotation.Tool;
@@ -56,9 +57,16 @@ public class JobKnowledgeTool {
 
     private final RedisCacheService cache;
 
+    private final double similarityThreshold;
+
     public JobKnowledgeTool(VectorStore vectorStore, RedisCacheService cache) {
+        this(vectorStore, cache, 0.0);
+    }
+
+    public JobKnowledgeTool(VectorStore vectorStore, RedisCacheService cache, double similarityThreshold) {
         this.vectorStore = vectorStore;
         this.cache = cache;
+        this.similarityThreshold = similarityThreshold;
     }
 
     @Tool(description = """
@@ -93,7 +101,7 @@ public class JobKnowledgeTool {
         List<Document> found = vectorStore.similaritySearch(SearchRequest.builder()
                 .query(query)
                 .topK(FETCH_TOP_K)
-                .similarityThreshold(0.0)
+                .similarityThreshold(similarityThreshold)
                 .build());
 
         if (found == null || found.isEmpty()) {
@@ -115,9 +123,8 @@ public class JobKnowledgeTool {
         int index = 1;
         for (Document doc : selected.subList(0, Math.min(MAX_RETURN, selected.size()))) {
             String text = doc.getText() == null ? "" : doc.getText().replaceAll("\\s+", " ").trim();
-            if (text.length() > MAX_CHARS_PER_DOC) {
-                text = text.substring(0, MAX_CHARS_PER_DOC) + "…（已截断）";
-            }
+            // 采用语义友好截断，避免切断句尾结论句
+            text = TextTruncator.truncateGracefully(text, MAX_CHARS_PER_DOC, "…（已截断）");
             sb.append("\n【资料 ").append(index++).append("｜来源：")
                     .append(doc.getMetadata().getOrDefault("filename", "未知"))
                     .append("】\n")

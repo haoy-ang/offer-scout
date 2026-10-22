@@ -79,14 +79,24 @@ public class JobApp {
                   SimpleVectorStore jobVectorStore,
                   ChatMemory chatMemory,
                   ConversationService conversationService) {
+        this(dashscopeChatModel, jobVectorStore, chatMemory, conversationService, 0.0);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public JobApp(ChatModel dashscopeChatModel,
+                  SimpleVectorStore jobVectorStore,
+                  ChatMemory chatMemory,
+                  ConversationService conversationService,
+                  @org.springframework.beans.factory.annotation.Value("${offer-scout.rag.similarity-threshold:0.0}")
+                  double similarityThreshold) {
         this.chatMemory = chatMemory;
         this.conversationService = conversationService;
 
-        // 检索配置：取相似度最高的 4 段；similarityThreshold 为 0 表示不做阈值过滤（先保证能召回）
+        // 检索配置：取相似度最高的 4 段；相似度阈值支持配置覆盖（经由 rag-eval-set 评估集调优）
         this.questionAnswerAdvisor = QuestionAnswerAdvisor.builder(jobVectorStore)
                 .searchRequest(SearchRequest.builder()
                         .topK(4)
-                        .similarityThreshold(0.0)
+                        .similarityThreshold(similarityThreshold)
                         .build())
                 .build();
 
