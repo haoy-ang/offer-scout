@@ -87,7 +87,7 @@ public class JobApp {
                   SimpleVectorStore jobVectorStore,
                   ChatMemory chatMemory,
                   ConversationService conversationService,
-                  @org.springframework.beans.factory.annotation.Value("${offer-scout.rag.similarity-threshold:0.0}")
+                  @org.springframework.beans.factory.annotation.Value("${offer-scout.rag.similarity-threshold:0.55}")
                   double similarityThreshold) {
         this.chatMemory = chatMemory;
         this.conversationService = conversationService;

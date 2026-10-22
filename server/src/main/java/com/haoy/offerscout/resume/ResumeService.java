@@ -46,7 +46,7 @@ public class ResumeService {
     private final VectorStore vectorStore;
     private final ResumeParser resumeParser;
 
-    @Value("${offer-scout.rag.similarity-threshold:0.0}")
+    @Value("${offer-scout.rag.similarity-threshold:0.55}")
     private double similarityThreshold = 0.0;
 
     public ResumeService(ChatModel chatModel, VectorStore jobVectorStore, ResumeParser resumeParser) {

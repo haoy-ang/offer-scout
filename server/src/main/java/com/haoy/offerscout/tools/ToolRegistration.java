@@ -27,7 +27,7 @@ public class ToolRegistration {
     @Bean
     public ToolCallback[] offerScoutTools(VectorStore jobVectorStore,
                                           RedisCacheService cacheService,
-                                          @org.springframework.beans.factory.annotation.Value("${offer-scout.rag.similarity-threshold:0.0}")
+                                          @org.springframework.beans.factory.annotation.Value("${offer-scout.rag.similarity-threshold:0.55}")
                                           double similarityThreshold) {
         return ToolCallbacks.from(
                 new JobKnowledgeTool(jobVectorStore, cacheService, similarityThreshold),
