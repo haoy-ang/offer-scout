@@ -138,9 +138,15 @@ document/
 
 | 档位 | 标签 | 依赖 | 用例 |
 |---|---|---|---|
-| 纯 JVM | （无标签） | 无 —— 手动 `new`，不启 Spring | `StructuredOutputRetryTest`、`ConversationServiceOwnershipTest`、`JobDocumentLoaderTest`、`TokenUsageChatModelTest`、`TextTruncatorTest`、`RagEvaluationDatasetTest`、`ResumeParserTest`（37 个用例全绿） |
+| 纯 JVM | （无标签） | 无 —— 手动 `new`，不启 Spring | `StructuredOutputRetryTest`、`ConversationServiceOwnershipTest`、`JobDocumentLoaderTest`、`TokenUsageChatModelTest`、`TextTruncatorTest`、`RagEvaluationDatasetTest`、`ResumeParserTest`、`VerdictTest`（**46 个用例全绿**） |
 | 需要基础设施 | `requires-infra` | MySQL / Redis | `RateLimitInterceptorTest`、`RedisCacheServiceTest`、`JobKnowledgeToolCacheTest`、`OfferScoutApplicationTests` |
 | 需要真实大模型 | `requires-ai` | 有效 DashScope API Key | `JobAppTest`、`JobRagTest`、`OfferScoutAgentTest`、`ConversationPersistenceTest`、`RagEvaluationRunnerTest`、`RagAnswerQualityEvalTest` |
+
+**第 ③ 档不是"理论上存在"** —— `.github/workflows/nightly.yml` 每天北京时间 02:00 跑一次
+（`-Dgroups=requires-ai -Djudge.samples=45`），也可以 `workflow_dispatch` 手动触发。
+报告落在 `target/eval-reports/`，由 `upload-artifact` 存档 30 天。
+原因很实在：日常 CI 排除 AI 档是对的（按量计费），但那意味着**最核心的链路一次都没在 CI 里跑过**。
+「我做过实验」和「我每天在跑实验」是两个量级的回答，差别只是一个 workflow 文件。
 
 三种跑法：
 
@@ -235,36 +241,66 @@ document/
 ./mvnw test -Dtest=RagAnswerQualityEvalTest -Djudge.samples=45   # 全量（约 90 次模型调用）
 ```
 
-每条样本走**真实问答链路**（`JobApp.doChatWithRag`），再让模型按 0-5 打分，并单独判 `grounded`
-（回答里的事实性断言能否找到依据）。
+每条样本走**真实问答链路**（`JobApp.doChatWithRag`），再让模型按 0-5 打分，并单独判 `grounded`。
 
 > **分数和 grounded 是两件事，别只看分数**：一个流畅但编了细节的回答会拿高分却 `grounded=false`，
 > 这才是最危险的一类 —— 用户看着挺像那么回事，其实是编的。
 
-**基线（2026-10-22）**
+**judge 必须能看到检索片段 —— 这是这套评测最容易做错的地方。**
 
-- 45 条全量：平均 **3.93 / 5**（5 分 14 条、4 分 18 条、3 分 11 条、2 分 1 条、**0 分 1 条**）。
-- 同一批 5 条抽样连跑两次：**4.40 和 3.80** —— 见下面的方差警告。
+第一版 judge 只拿到「问题 + 回答」，判据是"这个断言能不能在通用面经知识里找到依据"。
+结果是：凡是回答里出现「某份 JD 要求 4.5–6K」「岗位明确要求 Nacos」这种**来自知识库素材**的具体细节，
+一律被判成"问题里没提供任何上下文，属编造"。
+**它测出来的不是"编造率"，是"具体程度"** —— 一个越忠实引用资料的回答，反而越容易被判成幻觉。
 
-不合格样本集中在**同一类问题：编造具体细节**。judge 抓到两类典型：
-1. 问微服务岗要求时，答出「Nacos 2.2 + Seata 1.8」这样的版本号、`feign.client.config.default.connectTimeout`
-   这样的配置项 —— 素材里没有，属于大方向对、细节全编。
-2. 问 Redis 缓存问题时，答出「缓存命中率从 72% 提升至 99.3%」这种量化收益，外加"Offer侦察兵""黄金表达"
-   这类营销话术 —— 纯属虚构。
+现在 `retrieveContext()` 用和 `JobApp` **完全相同**的参数（topK=4 + 同一个阈值配置）重现检索片段，
+一起喂给 judge；grounded 的判据改成四级（片段里有 → 有依据；片段没有但通用常识成立 → 有依据；
+都没有 → 编造；**片段为空时任何具体数字一律算编造**）。
 
-**这类幻觉对简历项目特别致命**：面试官顺着"72% 怎么测出来的"追问一句就穿了。
-它同时也证明了**检索指标不够**：同一批样本关键词命中率 93%，生成层仍有 4.4% 的编造率，
-只测"召回对不对"永远看不见"答得对不对"。
+**三次运行对比（2026-10-22，45 条全量）**
+
+| 运行 | 作答 prompt | judge 看得到片段 | 平均分 | grounded 未通过 | 评分失败 |
+|---|---|---|---|---|---|
+| A | 无"具体事实"约束 | ❌ | 3.93 | —（13 条 <4 分） | 0 |
+| B | 加了约束 | ❌ | 3.61 | 12 | 1（90s 超时） |
+| **C（现基线）** | 加了约束 | ✅ | **3.96** | **8** | 0 |
+
+**三条结论，按重要性排：**
+
+1. 🔍 **B 里的"编造"有一大半是 judge 误判。** B 有 11 条被判编造，其中 7 条（#13/14/15/20/21/29/36）
+   在 C 里直接变成 5 分 + "严格源自片段"—— 它们本来就是素材里的 JD 数据。
+   **这条比任何分数都值钱：一个错误的判据会让"越忠实"看起来"越会编"。**
+2. ⚠️ **A→B 证明不了 prompt 有没有用。** 3.93 → 3.61 差 0.32，而 judge 自身方差是 0.6。
+   而且我没做「旧 prompt + 新 judge」的对照，所以**"加约束到底有没有效"目前没有证据**。
+   拿 0.32 说"变差了"或不提这件事说"改善了"，都是自欺。
+3. 🔴 **C 剩下的 8 条里，6 条是真编造，而且全是同一类**：检索片段覆盖不到的地方，
+   模型**把答案补完整，而不是拒答** —— 编量化数据（1200 QPS / P99<95ms / 覆盖率 91%）、
+   编工具链（Grafana 面板、ThreadLocalRandom 限流）、编版本（Qwen2.5-0.5B）。
+   → **光在 prompt 里写"没有依据就不要给具体值"基本没用**：它知道自己被要求了什么，
+   但当上下文不足以回答时，默认行为仍然是"生成一个像样的答案"。
+   下一步该做的是让**拒答成为一条可执行路径**（召回为空/覆盖率低时显式降级），
+   或回答后加一层事实校验（把数字/版本号与片段对齐，对不上就打回重写）。**这条还没做。**
 
 > ⚠️ **judge 分数有方差，别拿单次结果当定论。**
 > 同一批 5 条样本连跑两次得到 4.40 与 3.80，相差 0.6 分 —— 模型采样本身有随机性。
 > 正确用法是：改 prompt / 换模型前后**各跑一次同规模样本看趋势**，而不是拿"这次比上次高 0.2"当结论；
 > 条件允许就跑 3 次取中位数。基线数字只用于**同项目内的相对比较**。
 
+**实现上的两个必要保护**
+
+- **每次模型调用套 90 秒硬超时**（`CALL_TIMEOUT_SECONDS`）：DashScope 客户端没有读超时，
+  一次上游不返回就会永久挂住（实测挂死 33 分钟，jstack 定位见「踩坑记录 8」）。
+  超时记一条 `-1` 的失败样本继续跑，否则一次网络抖动能把 nightly 挂整晚。
+  报告里 `-1` 多说明上游不稳，不是答得差。
+- **judge 也要注入当前日期**（`TimeContext.promptSection()`）：作答侧早就接了，判分侧原先漏了，
+  于是回答里写"2026 年的主流实践"（今天确实是 2026-10）会被 judge 当成"时间断言虚构"。
+  判据要一致，两边都得知道今天几号。
+
 **已知局限（写清比藏着好）**：
 - **judge 与作答是同一个模型**，会系统性偏宽松 → 分数只能用于**同项目内不同版本的相对比较**，不能跨项目比绝对值。
 - 自动打分仍需人工抽查校准（未做）。
-- 会往 `conversation` 表写 `eval-judge-*` 开头的会话记录（刻意走真实链路，不为评测改代码路径）。
+- 会往 `conversation` 表写 `eval-judge-*` 开头的会话记录，并往 `chat_message` 写归档
+  （刻意走真实链路，不为评测改代码路径）。
 
 **局限**：关键词命中只能发现"召回到的片段跑偏了"，测不出"答案答得对不对"—— 后者见上面的 judge。
 **改素材或换 embedding 模型后必须重跑扫表**，`0.55` 不能无条件沿用。
@@ -273,9 +309,24 @@ document/
 
 | 表 | 归属 | 作用 |
 |---|---|---|
-| `SPRING_AI_CHAT_MEMORY` | Spring AI 框架读写 | 对话消息正文 |
+| `SPRING_AI_CHAT_MEMORY` | Spring AI 框架读写 | **上下文窗口**：模型这一轮要带进去的历史（会被裁剪） |
+| `chat_message` | 本项目维护 | **全量归档**：归档页展示的历史（append-only，永不裁剪） |
 | `conversation` | 本项目维护 | 会话元数据（归属用户、标题、消息数、活跃时间） |
 | `app_user` | 本项目维护 | 业务用户（用户名、BCrypt 密文、昵称） |
+
+**为什么前两张表要分开？** 因为「给模型看的上下文」和「给人看的历史」是两个需求，
+裁剪策略正好相反：
+
+- 上下文要**裁剪**（`MessageWindowChatMemory(maxMessages=50)`）：历史全塞进 prompt 又贵又没用，
+  超出窗口的部分对模型没有价值。
+- 归档要**全量**：用户点开历史记录，理所当然期待看到整场对话。
+
+⚠️ **混用会直接变成产品缺陷**。`MessageWindowChatMemory` 保存时是**用裁剪后的窗口覆盖**数据库，
+不是"只在读取时截断" —— 所以只要把归档页接到 `ChatMemory` 上，用户聊到第 26 轮就会发现前面全没了，
+而且**全世界都不会报错**：没有异常、没有红日志，只是历史凭空短了一截。
+现在的做法是 `ConversationService` 明确分工：
+`getMessages()`（归档页）读 `chat_message`，模型上下文走 `ChatMemory`，
+写归档由 `archiveTurn()` 在每轮对话结束时落库（流式接口靠 `StringBuilder` 边推边攒，`doOnComplete` 时归档）。
 
 两处容易踩的坑，都已在本项目里处理：
 
@@ -286,7 +337,12 @@ document/
    → 索引写进 `CREATE TABLE` 的 `KEY` 子句，配合 `IF NOT EXISTS` 天然幂等。
 
 另外 `MessageWindowChatMemory` 是**滑动窗口**：保存时会用裁剪后的窗口覆盖数据库，
-所以 `SPRING_AI_CHAT_MEMORY` 里只保留最近 `maxMessages` 条，不是全量聊天记录。
+所以 `SPRING_AI_CHAT_MEMORY` 里只保留最近 `maxMessages` 条，不是全量聊天记录 ——
+这正是 `chat_message` 存在的原因（见上）。
+
+> 归档表的两个设计点：**① 不建外键**（删除由业务代码显式清，加外键会把"先删元数据还是先删消息"
+> 变成硬约束，并发删除时容易撞约束报错）；**② 不按内容去重**（用户在同一会话里重复问同一句话是合法的，
+> 按 `(conversation_id, content)` 去重会把正常对话吞掉）。防重复靠调用侧：每轮只在模型真正返回之后写一次。
 
 ### 给已存在的库补列（`SchemaMigrator`）
 
@@ -551,6 +607,20 @@ BCrypt 内置可调工作因子（慢）+ 自带盐（免疫彩虹表），校�
 综合面），不能做成 `defaultSystem`。拼接同样用 `String.replace` 换 `{{TYPE}}`、`{{ROLE}}`，
 不用 `formatted()`（见踩坑 6：提示词里的字面 `%` 会被当格式符）。
 
+**4. 复盘结论是枚举，不是自由字符串。** `InterviewReport.verdict` 的类型是 `Verdict`
+（`PASS` / `PENDING` / `REJECT`），prompt 里明确要求模型输出**英文枚举名**。
+
+原先它是 `String`：模型输出「建议通过 / 待定 / 不建议通过」全靠自觉，实际上会写成「不通过」「基本通过」
+「建议再看看」。前端为了配色只能做字符串嗅探 —— 而「不通过」不带"不建议"三字，
+一旦被 `includes("通过")` 抢先匹配就会显示成**绿色**：结论是"没过"，页面上是"通过"。
+**错配色比不配色更误导人**，因为它看起来像结论。
+
+现在的分层：
+- **契约在前**：prompt 要求枚举名 → Jackson 按枚举反序列化，`@JsonValue` 序列化回枚举名给前端。
+- **容错在后**：`Verdict.from()` 是唯一一处"猜字符串"的地方（吃中文、先否定后肯定、认不出判 `PENDING`）。
+  空值返回 `null` → 完整性校验判不过 → 走既有的结构化输出重试，**而不是替模型拍一个结论**。
+- **表现层是穷尽映射**：前端 `Record<InterviewVerdict, …>`，少写一个分支 `vue-tsc` 直接报错。
+
 **4. 面试中不评价，复盘才评价。** 提示词里明确要求面试官只提问、不解答、不给建议 ——
 否则模型很容易"边问边教"，一场面试就变成了答疑，失去模拟的价值。所有评估集中到一次复盘里。
 
@@ -636,8 +706,23 @@ token（本项目用 `{{REFERENCE}}`）。这个坑在写 prompt 模板时几乎
 真实前端永远用 `FormData` 上传（自动带 multipart 头），不受影响；写脚本验证时记得也给空请求挂个
 `new FormData()`。
 
-## 目录结构
+### 8. 大模型客户端没有读超时 —— 一次网络抖动能把调用挂死几十分钟
 
+排查过程值得记（这是一次完整的"卡死定位"）：
+
+1. **先排除死循环**：`Get-Process java` 采两次 CPU，8 秒只涨 0.11s → 不是在算，是在等。
+2. **再拿线程栈**：`jstack <pid>`，`main` 线程 `elapsed=1994s`，栈顶是
+   `JdkClientHttpRequest.executeInternal → CompletableFuture.get()` —— **无 timeout 的阻塞等待**；
+   往上是 `DashScopeChatModel.internalCall → RestClient.exchange → toEntity`。
+3. **结论**：DashScope 客户端没配读超时，上游不返回就永久挂住。
+
+`RetryTemplate` 在这里完全没用 —— 重试的前提是"抛异常"，而永远不返回的调用**走不到重试那一行**。
+能把它变成异常的，只有超时本身。
+
+**评测侧已加硬闸**（`RagAnswerQualityEvalTest.CALL_TIMEOUT_SECONDS = 90`，超时记失败样本继续跑）。
+生产链路暂时没动：读超时设小了会误杀 Agent 的正常长任务，需要压测后定值，属于该单独做一次的改动。
+
+## 目录结构
 ```
 offer-scout/
 ├── src/main/java/com/haoy/offerscout/
