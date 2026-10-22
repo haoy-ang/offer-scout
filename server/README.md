@@ -140,7 +140,7 @@ document/
 |---|---|---|---|
 | 纯 JVM | （无标签） | 无 —— 手动 `new`，不启 Spring | `StructuredOutputRetryTest`、`ConversationServiceOwnershipTest`、`JobDocumentLoaderTest`、`TokenUsageChatModelTest`、`TextTruncatorTest`、`RagEvaluationDatasetTest`、`ResumeParserTest`（37 个用例全绿） |
 | 需要基础设施 | `requires-infra` | MySQL / Redis | `RateLimitInterceptorTest`、`RedisCacheServiceTest`、`JobKnowledgeToolCacheTest`、`OfferScoutApplicationTests` |
-| 需要真实大模型 | `requires-ai` | 有效 DashScope API Key | `JobAppTest`、`JobRagTest`、`OfferScoutAgentTest`、`ConversationPersistenceTest`、`RagEvaluationRunnerTest` |
+| 需要真实大模型 | `requires-ai` | 有效 DashScope API Key | `JobAppTest`、`JobRagTest`、`OfferScoutAgentTest`、`ConversationPersistenceTest`、`RagEvaluationRunnerTest`、`RagAnswerQualityEvalTest` |
 
 三种跑法：
 
@@ -225,8 +225,48 @@ document/
 > 算进去会造出"阈值调高 → 空召回变多 → 抑制率反而下降"的假象）；
 > 拒答率 = 超纲题数；平均片段数 = 全样本（超纲题硬召回同样烧 token）。
 
-**局限**：只测「关键词是否命中」，能发现"召回到的片段跑偏了"，但测不出"答案答得对不对"。
-要做质量分需要 LLM-as-judge 批量打分 + 人工抽检校准（未做）。
+### 答案质量评测（LLM-as-judge）
+
+上面那张表测的是**检索层**（该召回的召回了没有、阈值定多少）；这个测**生成层**（拿到片段之后答得对不对）。
+两者不能互相替代：关键词命中率 93% 不代表答案好用 —— 模型完全可能把召回到的正确资料说错。
+
+```bash
+./mvnw test -Dtest=RagAnswerQualityEvalTest                      # 默认 5 条，验通路用
+./mvnw test -Dtest=RagAnswerQualityEvalTest -Djudge.samples=45   # 全量（约 90 次模型调用）
+```
+
+每条样本走**真实问答链路**（`JobApp.doChatWithRag`），再让模型按 0-5 打分，并单独判 `grounded`
+（回答里的事实性断言能否找到依据）。
+
+> **分数和 grounded 是两件事，别只看分数**：一个流畅但编了细节的回答会拿高分却 `grounded=false`，
+> 这才是最危险的一类 —— 用户看着挺像那么回事，其实是编的。
+
+**基线（2026-10-22）**
+
+- 45 条全量：平均 **3.93 / 5**（5 分 14 条、4 分 18 条、3 分 11 条、2 分 1 条、**0 分 1 条**）。
+- 同一批 5 条抽样连跑两次：**4.40 和 3.80** —— 见下面的方差警告。
+
+不合格样本集中在**同一类问题：编造具体细节**。judge 抓到两类典型：
+1. 问微服务岗要求时，答出「Nacos 2.2 + Seata 1.8」这样的版本号、`feign.client.config.default.connectTimeout`
+   这样的配置项 —— 素材里没有，属于大方向对、细节全编。
+2. 问 Redis 缓存问题时，答出「缓存命中率从 72% 提升至 99.3%」这种量化收益，外加"Offer侦察兵""黄金表达"
+   这类营销话术 —— 纯属虚构。
+
+**这类幻觉对简历项目特别致命**：面试官顺着"72% 怎么测出来的"追问一句就穿了。
+它同时也证明了**检索指标不够**：同一批样本关键词命中率 93%，生成层仍有 4.4% 的编造率，
+只测"召回对不对"永远看不见"答得对不对"。
+
+> ⚠️ **judge 分数有方差，别拿单次结果当定论。**
+> 同一批 5 条样本连跑两次得到 4.40 与 3.80，相差 0.6 分 —— 模型采样本身有随机性。
+> 正确用法是：改 prompt / 换模型前后**各跑一次同规模样本看趋势**，而不是拿"这次比上次高 0.2"当结论；
+> 条件允许就跑 3 次取中位数。基线数字只用于**同项目内的相对比较**。
+
+**已知局限（写清比藏着好）**：
+- **judge 与作答是同一个模型**，会系统性偏宽松 → 分数只能用于**同项目内不同版本的相对比较**，不能跨项目比绝对值。
+- 自动打分仍需人工抽查校准（未做）。
+- 会往 `conversation` 表写 `eval-judge-*` 开头的会话记录（刻意走真实链路，不为评测改代码路径）。
+
+**局限**：关键词命中只能发现"召回到的片段跑偏了"，测不出"答案答得对不对"—— 后者见上面的 judge。
 **改素材或换 embedding 模型后必须重跑扫表**，`0.55` 不能无条件沿用。
 
 ## 数据存储

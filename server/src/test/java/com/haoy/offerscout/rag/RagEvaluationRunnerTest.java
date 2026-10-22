@@ -17,6 +17,8 @@ import org.springframework.test.context.ActiveProfiles;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -172,8 +174,26 @@ class RagEvaluationRunnerTest {
         }
 
         String report = buildReport(evalItems.size(), sweepResults);
+        writeReport("threshold-sweep", report);
         log.info(report);
         System.out.println(report);
+    }
+
+    /**
+     * 报告落盘到 {@code target/eval-reports/}。
+     * <p>
+     * 不能只靠 {@code System.out}：Windows 上 mvn 的 stdout 经过 cmd.exe 中转，
+     * PowerShell 再按 GBK 解码，中文会被"烙"成乱码且不可逆。直接写 UTF-8 文件最省事。
+     */
+    private void writeReport(String name, String content) {
+        try {
+            Path dir = Path.of("target", "eval-reports");
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve(name + ".md"), content, StandardCharsets.UTF_8);
+            log.info("评估报告已写入 {}", dir.resolve(name + ".md").toAbsolutePath());
+        } catch (Exception e) {
+            log.warn("写评估报告失败：{}", e.getMessage());
+        }
     }
 
     /**
