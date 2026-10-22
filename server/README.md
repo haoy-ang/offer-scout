@@ -48,7 +48,8 @@
 
 ## 接口一览
 
-所有接口挂在 `/api` 下（`server.servlet.context-path`）。「限流」列是每个接口的额度（同一 IP，60 秒窗口）。
+所有接口挂在 `/api` 下（`server.servlet.context-path`）。
+限流口径：**登录接口按用户计数**（`Dimension.USER`），注册/登录按 **IP** 计数（那时还没有身份）；窗口均为 60 秒。
 
 ### 鉴权
 
@@ -66,7 +67,8 @@
 
 | 接口 | 说明 | 需登录 | 限流 |
 |---|---|---|---|
-| `GET /api/health/check` | 健康检查 | 否 | 不限 |
+| `GET /api/health/check` | 存活检查（进程活着就返回 `ok`，不查依赖） | 否 | 不限 |
+| `GET /api/health/ready` | 就绪检查（知识库状态：`state` / `searchable` / `chunks`） | 否 | 不限 |
 | `GET /api/ai/job/chat/sync` | 普通对话（同步，带多轮记忆） | 是 | 20/min |
 | `GET /api/ai/job/chat/sse` | 普通对话（SSE 流式） | 是 | 20/min |
 | `GET /api/ai/job/chat/rag` | 知识库问答（RAG 检索增强） | 是 | 10/min |
@@ -81,6 +83,7 @@
 | `POST /api/ai/interview/start` | 开始模拟面试，返回会话 ID 与面试官开场白（`role` 可选 / `type` = tech\|hr\|mixed） | 是 | 5/min |
 | `GET /api/ai/interview/chat/sse` | 回答一轮，面试官追问（SSE 流式，带 `sessionId`） | 是 | 30/min |
 | `POST /api/ai/interview/report` | 结束面试，生成结构化复盘（带 `sessionId`） | 是 | 5/min |
+| `GET /api/ops/usage` | 模型调用用量快照（token / 耗时，按场景与模型聚合） | 是 | 30/min |
 
 需登录的接口统一用请求头 `Authorization: Bearer <token>` 携带凭证；
 未携带或凭证失效时返回 `401` + `{"code":401,"message":"请先登录"}`。
@@ -135,9 +138,9 @@ document/
 
 | 档位 | 标签 | 依赖 | 用例 |
 |---|---|---|---|
-| 纯 JVM | （无标签） | 无 —— 手动 `new`，不启 Spring | `StructuredOutputRetryTest`、`ConversationServiceOwnershipTest`、`JobDocumentLoaderTest` |
+| 纯 JVM | （无标签） | 无 —— 手动 `new`，不启 Spring | `StructuredOutputRetryTest`、`ConversationServiceOwnershipTest`、`JobDocumentLoaderTest`、`TokenUsageChatModelTest`、`TextTruncatorTest`、`RagEvaluationDatasetTest`、`ResumeParserTest`（37 个用例全绿） |
 | 需要基础设施 | `requires-infra` | MySQL / Redis | `RateLimitInterceptorTest`、`RedisCacheServiceTest`、`JobKnowledgeToolCacheTest`、`OfferScoutApplicationTests` |
-| 需要真实大模型 | `requires-ai` | 有效 DashScope API Key | `JobAppTest`、`JobRagTest`、`OfferScoutAgentTest`、`ConversationPersistenceTest` |
+| 需要真实大模型 | `requires-ai` | 有效 DashScope API Key | `JobAppTest`、`JobRagTest`、`OfferScoutAgentTest`、`ConversationPersistenceTest`、`RagEvaluationRunnerTest` |
 
 三种跑法：
 
@@ -169,6 +172,31 @@ document/
 > 401（`InvalidApiKey`）同样会被重试并退避 —— 实测一条"误入 CI 的 `requires-ai` 用例"跑了
 > 2 分半才报错（日志里是 `Retry error. Retry count: 1`）。所以核对"分档有没有生效"时，
 > 要看 `Tests run` 的**数字**，不能只看"跑完了"。
+
+### RAG 评估集怎么用
+
+`src/test/resources/eval/rag-eval-set.jsonl` —— 30 条样本，四类（面经 12 / 岗位JD 10 / 简历写作 8）。
+每行一条 JSON：`question` + `mustContain`（期望命中的要点）+ `mustNotContain`（一旦出现就说明召回了噪音）。
+
+| 用途 | 跑什么 | 进 CI |
+|---|---|---|
+| 守住数据集本身（格式、条数、分类分布） | `RagEvaluationDatasetTest` | 是（纯 JVM，零成本） |
+| 扫阈值，给 `similarityThreshold` 定值 | `RagEvaluationRunnerTest` | 否（要真实 embedding，按需手动跑） |
+
+```bash
+./mvnw test -Dtest=RagEvaluationRunnerTest
+```
+
+输出一张表（阈值 × 四个指标），外加一段**由数据推导**的结论：以 `0.0` 为基线，
+在「命中率衰减 ≤ 5 个百分点 且 空召回率 ≤ 10%」的约束内，取噪音抑制率最高的点作为推荐阈值。
+数据变了结论跟着变 —— 这里刻意没有写死"推荐 0.35"这类文案，否则表格和结论迟早打架。
+
+> ⚠️ **噪音抑制率的分母是「有召回的样本」，不是全样本。**
+> 空召回既没有噪音也没有信息，若算进分母，会出现"阈值调高 → 空召回变多 → 抑制率反而下降"的假象，
+> 把"召回不到东西"误读成"噪音变多"。
+
+**局限**：只测「关键词是否命中」，能发现"召回到的片段跑偏了"，但测不出"答案答得对不对"。
+要做质量分需要 LLM-as-judge 批量打分 + 人工抽检校准（未做）。
 
 ## 数据存储
 
@@ -214,11 +242,11 @@ document/
 
 ```java
 @GetMapping("/chat/rag")
-@RateLimit(limit = 10, windowSeconds = 60)
+@RateLimit(limit = 10, windowSeconds = 60, dimension = RateLimit.Dimension.USER)
 public String chatWithRag(@RequestParam String message) { ... }
 ```
 
-三个设计点：
+四个设计点：
 
 1. **用拦截器而不是 AOP**。限流是 HTTP 层的事：判断维度要拿客户端 IP，拒绝时得直接写状态码和响应体。
    `HandlerInterceptor.preHandle` 天然拿得到 `HttpServletRequest/Response`，比在切面里
@@ -228,6 +256,12 @@ public String chatWithRag(@RequestParam String message) { ... }
    把两条命令写进一个 Lua 脚本，Redis 会把它当一条命令原子执行。
 3. **Redis 故障时选择放行**。限流是保护措施，保护措施自己出故障时，正确做法是降级为不限流并告警，
    而不是让全站跟着不可用。
+4. **维度要和业务主体对齐**。登录接口用 `Dimension.USER`（按 userId 计数）——
+   用 IP 会让同一出口 NAT 下的用户共享额度、换代理又重置，"每人 N 次"根本约束不到人。
+   只有注册 / 登录这类还没有身份的接口才用 `Dimension.IP`。
+   ⚠️ `X-Forwarded-For` 是客户端可伪造的请求头，默认 **不信任**
+   （`offer-scout.ratelimit.trust-forwarded-headers=false`）；部署在可信代理后才打开，
+   且代理必须用 `proxy_set_header X-Forwarded-For $remote_addr` **覆盖**写入。
 
 超限返回 `429` + `Retry-After` 头 + 中文提示：
 
@@ -258,6 +292,62 @@ offerscout:cache:rag:search:v1:<fingerprint>     TTL 1800s
 > 目前缓存只覆盖 **Agent 的知识库检索**。`/chat/rag` 走的是 `QuestionAnswerAdvisor` 的检索链路，
 > 想连它一起缓存，需要用装饰器包一层 `VectorStore`（`CachingVectorStore implements VectorStore`），
 > 代价是要处理 `Document` 的序列化。留作后续。
+
+## 成本可观测（token 记账）
+
+限流是"控制成本"，这一节是"看见成本"。此前的状态是：**每个功能都在按量计费，但没有任何地方记录花了多少 token** ——
+不知道一天烧多少钱、不知道哪个功能最贵、没法做预算。这不是优化项，是"按量计费系统"的基础设施。
+
+### 怎么实现的：包一层 `ChatModel`
+
+项目里 6 处 `ChatClient.builder(chatModel)`（问答 / Agent / 简历 / 匹配 / 面试 ×2）**全部从同一个 `ChatModel` 出发**，
+所以只在最底层包一次 `TokenUsageChatModel` 就全覆盖了 —— 包括 Agent 内部每一轮 think/act 的调用。
+埋点写在业务层会漏，写在必经之路上漏不了。
+
+装配方式：`@Primary` 对外 + `@Qualifier("dashscopeChatModel")` 对内。
+
+```java
+@Bean @Primary
+public ChatModel tokenUsageChatModel(@Qualifier("dashscopeChatModel") ChatModel delegate,
+                                     TokenUsageRecorder recorder) { ... }
+```
+
+`@Primary` 让按类型注入的 6 处拿到装饰器；`@Qualifier` 点死原生 bean 名 ——
+否则装饰器**按类型**注入会解析到 `@Primary`（它自己），直接构成自我依赖、启动报循环依赖。
+这类错误编译期看不出来，只能靠 `OfferScoutApplicationTests` 里那条
+`assertInstanceOf(TokenUsageChatModel.class, chatModel)` 守住。
+
+### 场景是怎么传的（以及为什么不用 AOP）
+
+`TokenUsageScene` 是 ThreadLocal + try-with-resources（保存/还原，支持嵌套），在 Controller 层显式标：
+
+```java
+try (var ignored = TokenUsageScene.open("简历诊断")) {
+    return resumeService.analyze(file, text, targetJob);
+}
+```
+
+**刻意不用拦截器/AOP 自动注入**：ThreadLocal 不跨线程，Agent 任务跑在专用线程池、流式回调跑在 Reactor 线程，
+在请求线程上自动标注的话那些调用全会被记到 `unknown`。显式标注啰嗦，但**不会记错账** —— 宁可少一点优雅。
+
+### 怎么用
+
+```bash
+# 实时日志：每次调用一行，字段顺序固定
+grep '\[token\]' app.log
+# [token] scene=简历诊断 model=qwen-max in=3120 out=860 cost=8420ms stream=false usage=ok
+
+# 聚合快照（全局 / 按场景 / 按模型 / 最近 20 条）
+GET /api/ops/usage
+```
+
+### 三个必须说清的限制
+
+1. **计数在内存**：进程重启归零，多实例各算一份。要做成本报表得"每次落一行 + 按天聚合"。
+2. **流式场景的归因可能不全**：`stream()` 构建与订阅可能跨线程，取不到场景时记为 `unknown`。
+   总量仍然准确，只是拆不到功能维度。
+3. **`usageMissingCalls` 要盯着**：供应商没在末尾 chunk 返回 usage 时，只能记次数和耗时。
+   这个数涨起来说明"统计不可信"，而不是"花得少"——**假装记 0 比不记更危险**。
 
 ## 登录鉴权（JWT）
 
@@ -317,7 +407,7 @@ BCrypt 内置可调工作因子（慢）+ 自带盐（免疫彩虹表），校�
 
 1. **用完必须清理。** Tomcat 用线程池、线程会复用，不在 `afterCompletion` 里 `remove()`，
    下一个请求就会"继承"上一个用户的身份 —— 这是 ThreadLocal 最经典的越权漏洞。
-2. **换线程就丢。** 异步链路（`doOnComplete` 跑在 Reactor 线程、`CompletableFuture.runAsync` 跑在线程池）
+2. **换线程就丢。** 异步链路（`doOnComplete` 跑在 Reactor 线程、Agent 任务跑在专用线程池 `agentExecutor`）
    读不到请求线程上的 ThreadLocal。所以身份要么**在请求线程上先取出来、显式传参**
    （`JobApp` 的 `userId` 参数就是这么来的），要么确保鉴权在异步开始前已经完成
    （`@RequireLogin` 在 `preHandle` 阶段就拦下了未登录请求，Agent 的异步线程里不需要再判一次）。
