@@ -168,11 +168,19 @@ class RagEvaluationRunnerTest {
         }
 
         SweepResult baseline = results.get(0);
-        report.append(String.format("> 1. 基线 threshold=%.2f：命中率 %.1f%%，平均召回 %.2f 个片段。\n",
-                baseline.threshold(), baseline.hitRate() * 100, baseline.avgChunks()));
+        report.append(String.format("> 1. 基线 threshold=%.2f：命中率 %.1f%%，空召回率 %.1f%%，噪音抑制率 %.1f%%，平均召回 %.2f 个片段。\n",
+                baseline.threshold(), baseline.hitRate() * 100, baseline.emptyRate() * 100,
+                baseline.noiseRejectionRate() * 100, baseline.avgChunks()));
 
+        SweepResult flatTop = findFlatTop(results, baseline);
         SweepResult recommended = pickRecommended(results, baseline);
-        if (recommended == null || Math.abs(recommended.threshold() - baseline.threshold()) < EPSILON) {
+
+        if (flatTop.threshold() > baseline.threshold() + EPSILON) {
+            report.append(String.format("> 2. **%.2f ~ %.2f 区间四个指标与基线完全相同** —— 阈值在这个区间"
+                            + "没起任何作用（平均召回仍是 %.2f 个片段）。根因是这批问题与素材同源，"
+                            + "相似度被系统性抬高，全都高于该阈值：既筛不掉噪音，也定不出阈值下限。\n",
+                    baseline.threshold(), flatTop.threshold(), baseline.avgChunks()));
+        } else if (Math.abs(recommended.threshold() - baseline.threshold()) < EPSILON) {
             report.append("> 2. 本次数据中没有任何更高阈值能在\"命中率衰减 ≤")
                     .append(String.format("%.0f", HIT_RATE_TOLERANCE * 100))
                     .append(" 个百分点 且 空召回率 ≤")
@@ -199,7 +207,34 @@ class RagEvaluationRunnerTest {
                 highest.threshold(), highest.hitRate() * 100, highest.emptyRate() * 100,
                 (highest.hitRate() - baseline.hitRate()) * 100));
 
+        if (baseline.hitRate() >= 0.90) {
+            report.append("> 4. ⚠️ 基线命中率 ≥90% 且低阈值区间无区分度 → **评估集存在同源偏置**："
+                    + "问题是从素材里改写出来的，必然召回得到，相似度也偏高。真实用户提问的分布更低，"
+                    + "**这批数据只能定出阈值上限，不能直接外推成线上值**；要定可信阈值，"
+                    + "得补一批「不来自素材」的问题（口语化问法、跨类目、模糊提问）。\n");
+        }
+
         return report.toString();
+    }
+
+    /**
+     * 找出与基线各项指标完全相同的最高阈值。
+     * <p>
+     * 用途：如果 0.00~0.50 结果一模一样，说明阈值在该区间根本没生效（不是"阈值无所谓"），
+     * 报告必须把这件事说出来，而不是机械地给一个"推荐值"。
+     */
+    private SweepResult findFlatTop(List<SweepResult> results, SweepResult baseline) {
+        SweepResult top = baseline;
+        for (SweepResult r : results) {
+            boolean identical = Math.abs(r.hitRate() - baseline.hitRate()) < EPSILON
+                    && Math.abs(r.emptyRate() - baseline.emptyRate()) < EPSILON
+                    && Math.abs(r.noiseRejectionRate() - baseline.noiseRejectionRate()) < EPSILON
+                    && Math.abs(r.avgChunks() - baseline.avgChunks()) < EPSILON;
+            if (identical) {
+                top = r;
+            }
+        }
+        return top;
     }
 
     /**
