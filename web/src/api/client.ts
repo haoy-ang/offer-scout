@@ -428,10 +428,18 @@ export interface InterviewStart {
   opening: string
 }
 
+/**
+ * 复盘结论三态（和后端 `Verdict` 枚举一一对应）。
+ * <p>
+ * 以前这里是 `string`，值就是模型随手写的中文，前端只能靠 `includes('通过')` 猜配色 ——
+ * 猜错的后果是「没过」显示成「待定」。现在后端收敛成枚举，配色判断是 `switch`，不再猜。
+ */
+export type InterviewVerdict = 'PASS' | 'PENDING' | 'REJECT'
+
 /** 面试复盘报告（和后端 InterviewReport record 一一对应） */
 export interface InterviewReport {
   overallScore: number
-  verdict: string
+  verdict: InterviewVerdict
   summary: string
   dimensions: { name: string; score: number; comment: string }[]
   highlights: { question: string; comment: string }[]

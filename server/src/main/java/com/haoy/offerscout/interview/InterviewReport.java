@@ -13,8 +13,15 @@ import java.util.List;
 public record InterviewReport(
         /** 综合表现 0~100 */
         int overallScore,
-        /** 结论，只能是「建议通过」「待定」「不建议通过」之一 */
-        String verdict,
+        /**
+         * 结论，枚举三态：{@link Verdict#PASS} / {@link Verdict#PENDING} / {@link Verdict#REJECT}。
+         * <p>
+         * 这里原本是 {@code String}，模型输出什么就是什么，前端只能靠
+         * {@code includes("通过")} 猜配色 —— 猜错的后果是"没过"显示成"待定"。
+         * 收敛成枚举后，配色判断从字符串嗅探变成 {@code switch}，契约也稳了。
+         * 模型不守约时由 {@link Verdict#from(String)} 兜底，容错只在那一处。
+         */
+        Verdict verdict,
         /** 一句话总评：能不能过 + 最该补的一个短板 */
         String summary,
         /** 分维度表现 */

@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import MessageComposer from '@/components/MessageComposer.vue'
 import MessageCard from '@/components/MessageCard.vue'
-import type { InterviewType } from '@/api/client'
+import type { InterviewType, InterviewVerdict } from '@/api/client'
 import {
   backToInterview as backToInterviewPhase,
   beginInterview,
@@ -78,24 +78,27 @@ onMounted(() => {
 })
 
 /**
- * 复盘结论 → 视觉档位：通过=松绿，待定=琥珀，不通过=朱砂。
+ * 复盘结论 → 视觉档位：PASS=松绿，PENDING=琥珀，REJECT=朱砂。
  * <p>
- * 判据顺序很关键：**先判否定、再判肯定**。原先写成 `includes('通过') && !includes('不')`，
- * 碰到「不通过」这种不带"不建议"三字的表述就会漏判、掉进琥珀色 ——
- * 结论明明是"没过"却显示成"待定"，这种错配色比不配色更误导人。
- * 所以先把所有否定表述归红档，剩下含"通过"的才是绿档。
+ * 这里的判据以前是**字符串嗅探**：`includes('不建议')` 先判否定、再判 `includes('通过')`。
+ * 之所以要"先否定后肯定"，是因为模型可能输出「不通过」这种不带"不建议"三字的表述，
+ * 一旦被 "通过" 抢先匹配就掉进绿档 —— 结论明明是"没过"却显示"通过"，
+ * 这种错配色比不配色更误导人。
  * <p>
- * TODO：更彻底的做法是让后端把 verdict 收敛成枚举（建议通过 / 待定 / 不建议通过），
- * 前端就不必猜字符串了。
+ * 现在 `verdict` 已经是后端枚举（PASS / PENDING / REJECT），配色变成**穷尽映射**：
+ * 少写一个分支 TypeScript 直接报错，不需要靠判据顺序兜底。
+ * 中文文案留在前端 —— 接口只传枚举名，改文案不影响契约。
  */
+const VERDICT_VIEW: Record<InterviewVerdict, { text: string; cls: string; tag: string }> = {
+  PASS: { text: '建议通过', cls: 'score--pine', tag: 'tag--pine' },
+  PENDING: { text: '待定', cls: 'score--amber', tag: '' },
+  REJECT: { text: '不建议通过', cls: 'score--ver', tag: 'tag--live' },
+}
+
 const verdict = computed(() => {
-  const v = report.value?.verdict ?? ''
-  if (!v) return { text: '待定', cls: 'score--amber', tag: '' }
-  if (v.includes('不建议') || v.includes('未通过') || v.includes('不通过')) {
-    return { text: v, cls: 'score--ver', tag: 'tag--live' }
-  }
-  if (v.includes('通过')) return { text: v, cls: 'score--pine', tag: 'tag--pine' }
-  return { text: v, cls: 'score--amber', tag: '' }
+  const v = report.value?.verdict
+  // 理论上 v 必然是三者之一；`??` 只是防"后端版本比前端旧"这种跨版本错配，不该发生但成本为零
+  return (v ? VERDICT_VIEW[v] : undefined) ?? VERDICT_VIEW.PENDING
 })
 
 function dimTone(score: number): string {

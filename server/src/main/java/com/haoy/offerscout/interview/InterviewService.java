@@ -151,8 +151,8 @@ public class InterviewService {
                         .entity(InterviewReport.class),
                 InterviewService::isUsable);
 
-        log.info("面试复盘完成：session={} 总分={} 结论={}", sessionId,
-                report.overallScore(), report.verdict());
+        log.info("面试复盘完成：session={} 总分={} 结论={}({})", sessionId,
+                report.overallScore(), report.verdict(), report.verdict().label());
         return report;
     }
 
@@ -165,7 +165,9 @@ public class InterviewService {
     private static boolean isUsable(InterviewReport r) {
         return r.overallScore() >= 0 && r.overallScore() <= 100
                 && r.dimensions() != null && !r.dimensions().isEmpty()
-                && StrUtil.isNotBlank(r.verdict())
+                // verdict 现在是枚举：null 说明模型既没给枚举名、也没给出可识别的中文表述，
+                // 属于"这场面试到底过没过都没说"，必须重试，不能当结论落下去。
+                && r.verdict() != null
                 && StrUtil.isNotBlank(r.summary());
     }
 
@@ -297,7 +299,9 @@ public class InterviewService {
                 ## 复盘要求
                 - overallScore 是 0~100 的整数，严格打分，大多数候选人的真实水平在 50~75 之间，
                   不要因为"态度好"就给高分
-                - verdict 只能取「建议通过」「待定」「不建议通过」三者之一，要和分数自洽
+                - verdict 只能取 PASS / PENDING / REJECT 三个**英文枚举名**之一（含义分别是
+                  「建议通过」「待定」「不建议通过」），要和分数自洽。
+                  直接输出枚举名本身，不要输出中文、不要加引号、不要写成别的近义词。
                 - highlights 和 issues 都要**引用面试中的具体问答**，不许泛泛说"技术基础扎实"
                 - issues 要说清"这个问题本该答到什么程度"，让候选人知道差距在哪
                 - 每条 suggestion 的 fix 要具体可执行（"把 XX 原理补一遍"、"下次讲项目先给结论再展开"）
