@@ -3,6 +3,7 @@ package com.haoy.offerscout.controller;
 import com.haoy.offerscout.auth.RequireLogin;
 import com.haoy.offerscout.match.JobMatch;
 import com.haoy.offerscout.match.JobMatchService;
+import com.haoy.offerscout.observability.TokenUsageScene;
 import com.haoy.offerscout.ratelimit.RateLimit;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -39,10 +40,13 @@ public class JobMatchController {
      * @param jd   目标岗位 JD（必填）
      */
     @PostMapping(value = "/analyze", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @RateLimit(limit = 5, windowSeconds = 60, message = "岗位匹配比较耗时，每分钟最多 5 次，请稍后再试。")
+    @RateLimit(limit = 5, windowSeconds = 60, dimension = RateLimit.Dimension.USER,
+            message = "岗位匹配比较耗时，每分钟最多 5 次，请稍后再试。")
     public JobMatch analyze(@RequestParam(value = "file", required = false) MultipartFile file,
                             @RequestParam(value = "text", required = false) String text,
                             @RequestParam(value = "jd", required = false) String jd) {
-        return jobMatchService.analyze(file, text, jd);
+        try (var ignored = TokenUsageScene.open("岗位匹配")) {
+            return jobMatchService.analyze(file, text, jd);
+        }
     }
 }

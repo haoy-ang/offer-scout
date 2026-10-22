@@ -1,6 +1,7 @@
 package com.haoy.offerscout.controller;
 
 import com.haoy.offerscout.auth.RequireLogin;
+import com.haoy.offerscout.observability.TokenUsageScene;
 import com.haoy.offerscout.ratelimit.RateLimit;
 import com.haoy.offerscout.resume.ResumeDiagnosis;
 import com.haoy.offerscout.resume.ResumeService;
@@ -39,10 +40,13 @@ public class ResumeController {
      * @param targetJob 目标岗位描述（可选）
      */
     @PostMapping(value = "/analyze", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @RateLimit(limit = 5, windowSeconds = 60, message = "简历诊断比较耗时，每分钟最多 5 次，请稍后再试。")
+    @RateLimit(limit = 5, windowSeconds = 60, dimension = RateLimit.Dimension.USER,
+            message = "简历诊断比较耗时，每分钟最多 5 次，请稍后再试。")
     public ResumeDiagnosis analyze(@RequestParam(value = "file", required = false) MultipartFile file,
                                    @RequestParam(value = "text", required = false) String text,
                                    @RequestParam(value = "targetJob", required = false) String targetJob) {
-        return resumeService.analyze(file, text, targetJob);
+        try (var ignored = TokenUsageScene.open("简历诊断")) {
+            return resumeService.analyze(file, text, targetJob);
+        }
     }
 }

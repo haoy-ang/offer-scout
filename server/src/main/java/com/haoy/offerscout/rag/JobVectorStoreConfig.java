@@ -39,10 +39,14 @@ public class JobVectorStoreConfig {
 
     private final EmbeddingModel embeddingModel;
     private final JobDocumentLoader jobDocumentLoader;
+    private final JobVectorStoreStatus status;
 
-    public JobVectorStoreConfig(EmbeddingModel embeddingModel, JobDocumentLoader jobDocumentLoader) {
+    public JobVectorStoreConfig(EmbeddingModel embeddingModel,
+                                JobDocumentLoader jobDocumentLoader,
+                                JobVectorStoreStatus status) {
         this.embeddingModel = embeddingModel;
         this.jobDocumentLoader = jobDocumentLoader;
+        this.status = status;
     }
 
     /**
@@ -61,29 +65,41 @@ public class JobVectorStoreConfig {
         List<Document> documents = jobDocumentLoader.loadMarkdowns();
         if (documents.isEmpty()) {
             log.warn("知识库为空（src/main/resources/document/ 下没有 .md 文档），RAG 检索不会命中任何内容");
+            status.mark(JobVectorStoreStatus.State.EMPTY, 0, 0, "document/ 目录下没有可用的 .md 素材");
             return vectorStore;
         }
 
         File cacheFile = resolveCacheFile(documents);
         if (cacheFile.exists()) {
             try {
+                long start = System.currentTimeMillis();
                 vectorStore.load(cacheFile);
+                long cost = System.currentTimeMillis() - start;
                 log.info("向量库命中缓存：{}（{} 个片段），跳过重复向量化", cacheFile.getName(), documents.size());
+                // 缓存 key 就是全部文档内容的摘要，所以缓存里的向量数 == documents.size()，不会对不上
+                status.mark(JobVectorStoreStatus.State.READY_FROM_CACHE, documents.size(), cost,
+                        "命中缓存 " + cacheFile.getName());
                 return vectorStore;
             } catch (Exception e) {
                 log.warn("缓存文件损坏或格式不兼容，改为重新向量化：{}", cacheFile.getName(), e);
             }
         }
 
+        long start = System.currentTimeMillis();
+        status.mark(JobVectorStoreStatus.State.BUILDING, 0, 0, "正在全量向量化，约需数十秒");
         try {
-            long start = System.currentTimeMillis();
             vectorStore.add(documents);
             long cost = System.currentTimeMillis() - start;
             log.info("向量库初始化完成：写入 {} 个片段，耗时 {} 秒", documents.size(), cost / 1000.0);
             saveCache(vectorStore, cacheFile);
+            status.mark(JobVectorStoreStatus.State.READY_BUILT, documents.size(), cost, "本次全量构建");
         } catch (Exception e) {
-            // 刻意不抛出：知识库挂了不应该让整个应用起不来，只是 RAG 能力降级
+            // 刻意不抛出：知识库挂了不应该让整个应用起不来，只是 RAG 能力降级。
+            // 但"降级"必须被看见 —— 所以状态同时写进 JobVectorStoreStatus，
+            // 由 /health/ready 暴露出去，避免"进程健康、答案全错"这种静默故障。
+            long cost = System.currentTimeMillis() - start;
             log.error("向量库初始化失败（重点排查：API Key 是否有效、网络是否可达、embedding 模型名是否正确）", e);
+            status.mark(JobVectorStoreStatus.State.FAILED, 0, cost, String.valueOf(e.getMessage()));
         }
         return vectorStore;
     }

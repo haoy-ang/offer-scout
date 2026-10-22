@@ -5,6 +5,7 @@ import com.haoy.offerscout.auth.UserContext;
 import com.haoy.offerscout.interview.InterviewReport;
 import com.haoy.offerscout.interview.InterviewService;
 import com.haoy.offerscout.interview.InterviewStart;
+import com.haoy.offerscout.observability.TokenUsageScene;
 import com.haoy.offerscout.ratelimit.RateLimit;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -41,32 +42,41 @@ public class InterviewController {
      * @param type 面试类型：tech / hr / mixed（默认 tech）
      */
     @PostMapping("/start")
-    @RateLimit(limit = 5, windowSeconds = 60, message = "面试开启过于频繁，请稍后再试。")
+    @RateLimit(limit = 5, windowSeconds = 60, dimension = RateLimit.Dimension.USER,
+            message = "面试开启过于频繁，请稍后再试。")
     public InterviewStart start(@RequestParam(required = false) String role,
                                 @RequestParam(required = false, defaultValue = "tech") String type) {
-        return interviewService.start(role, type, UserContext.requireUserId());
+        try (var ignored = TokenUsageScene.open("模拟面试")) {
+            return interviewService.start(role, type, UserContext.requireUserId());
+        }
     }
 
     /**
      * 候选人回答一轮，面试官追问（SSE 流式，边生成边推送）。
      */
     @GetMapping(value = "/chat/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    @RateLimit(limit = 30, windowSeconds = 60, message = "追问过于频繁，请稍后再试。")
+    @RateLimit(limit = 30, windowSeconds = 60, dimension = RateLimit.Dimension.USER,
+            message = "追问过于频繁，请稍后再试。")
     public Flux<String> chatSse(@RequestParam String sessionId,
                                 @RequestParam String message,
                                 @RequestParam(required = false) String role,
                                 @RequestParam(required = false, defaultValue = "tech") String type) {
-        return interviewService.chatByStream(sessionId, message, role, type, UserContext.requireUserId());
+        try (var ignored = TokenUsageScene.open("模拟面试")) {
+            return interviewService.chatByStream(sessionId, message, role, type, UserContext.requireUserId());
+        }
     }
 
     /**
      * 结束面试，生成结构化复盘报告。
      */
     @PostMapping("/report")
-    @RateLimit(limit = 5, windowSeconds = 60, message = "复盘生成过于频繁，请稍后再试。")
+    @RateLimit(limit = 5, windowSeconds = 60, dimension = RateLimit.Dimension.USER,
+            message = "复盘生成过于频繁，请稍后再试。")
     public InterviewReport report(@RequestParam String sessionId,
                                   @RequestParam(required = false) String role,
                                   @RequestParam(required = false, defaultValue = "tech") String type) {
-        return interviewService.report(sessionId, role, type, UserContext.requireUserId());
+        try (var ignored = TokenUsageScene.open("面试复盘")) {
+            return interviewService.report(sessionId, role, type, UserContext.requireUserId());
+        }
     }
 }

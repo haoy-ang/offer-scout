@@ -63,7 +63,16 @@ public final class StructuredOutputRetry {
                     return result;
                 }
                 log.warn("{}：第 {} 次输出内容不完整（能反序列化但关键字段缺失），准备重试", scene, attempt);
+            } catch (BusinessException e) {
+                // 业务语义错误（参数不合法、越权、下游 4xx）重试一万次结果也一样，
+                // 而每次重试都是一次真实计费的模型调用 —— 直接上抛，不兜。
+                throw e;
             } catch (RuntimeException e) {
+                if (isCodeBug(e)) {
+                    // NPE / 类型转换 / 越界：这是"我们自己的代码写错了"，不是"模型这次没写对"。
+                    // 吞掉重试只会把 bug 伪装成"模型不稳定"，把排错方向彻底带偏 —— 宁可炸出来。
+                    throw e;
+                }
                 // 单次失败不往外抛：重试的意义就在于把偶发失败吃掉。
                 // 真正的失败在循环外统一抛，保证"抛出去的一定是连续 N 次都失败"。
                 log.warn("{}：第 {} 次结构化输出失败（{}），准备重试", scene, attempt, e.getMessage());
@@ -72,6 +81,19 @@ public final class StructuredOutputRetry {
         }
         throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR,
                 scene + "失败：模型连续 " + MAX_ATTEMPTS + " 次都没有返回可用的结构化结果，请稍后重试。");
+    }
+
+    /**
+     * 区分「代码 bug」和「模型输出不符合预期」。
+     * <p>
+     * 判据很简单：下面这三类异常<b>不可能由 JSON 格式差异产生</b>。
+     * 一旦出现，说明是我们自己代码的空值判断 / 类型假设错了，
+     * 这时候重试三次再把 500 抛给用户，只会让真正的 bug 藏得更深。
+     */
+    private static boolean isCodeBug(RuntimeException e) {
+        return e instanceof NullPointerException
+                || e instanceof ClassCastException
+                || e instanceof IndexOutOfBoundsException;
     }
 
     /** 第 n 次失败后等 n 个退避单位；最后一次失败后不必再等 */

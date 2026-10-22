@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.app.JobApp;
 import com.haoy.offerscout.auth.RequireLogin;
 import com.haoy.offerscout.auth.UserContext;
+import com.haoy.offerscout.observability.TokenUsageScene;
 import com.haoy.offerscout.ratelimit.RateLimit;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -42,20 +43,26 @@ public class JobController {
      * 适合调试和短回答场景。
      */
     @GetMapping("/chat/sync")
-    @RateLimit(limit = 20, windowSeconds = 60)
+    @RateLimit(limit = 20, windowSeconds = 60, dimension = RateLimit.Dimension.USER)
     public String chatSync(@RequestParam String message,
                            @RequestParam(required = false) String chatId) {
-        return jobApp.doChat(message, resolveChatId(chatId), currentUserId());
+        // 标场景：这次调用产生的 token 会记到「智能问答」名下。
+        // 显式包而不是靠 AOP 自动注入，是因为流式/异步链路上 ThreadLocal 会丢 —— 见 TokenUsageScene 注释
+        try (var ignored = TokenUsageScene.open("智能问答")) {
+            return jobApp.doChat(message, resolveChatId(chatId), currentUserId());
+        }
     }
 
     /**
      * SSE 流式对话：边生成边推送，前端可以逐字渲染。
      */
     @GetMapping(value = "/chat/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    @RateLimit(limit = 20, windowSeconds = 60)
+    @RateLimit(limit = 20, windowSeconds = 60, dimension = RateLimit.Dimension.USER)
     public Flux<String> chatSse(@RequestParam String message,
                                 @RequestParam(required = false) String chatId) {
-        return jobApp.doChatByStream(message, resolveChatId(chatId), currentUserId());
+        try (var ignored = TokenUsageScene.open("智能问答")) {
+            return jobApp.doChatByStream(message, resolveChatId(chatId), currentUserId());
+        }
     }
 
     /**
@@ -63,20 +70,24 @@ public class JobController {
      * 问面试题、简历写法这类有标准答案的问题时用这个接口。
      */
     @GetMapping("/chat/rag")
-    @RateLimit(limit = 10, windowSeconds = 60)
+    @RateLimit(limit = 10, windowSeconds = 60, dimension = RateLimit.Dimension.USER)
     public String chatWithRag(@RequestParam String message,
                               @RequestParam(required = false) String chatId) {
-        return jobApp.doChatWithRag(message, resolveChatId(chatId), currentUserId());
+        try (var ignored = TokenUsageScene.open("知识库问答")) {
+            return jobApp.doChatWithRag(message, resolveChatId(chatId), currentUserId());
+        }
     }
 
     /**
      * RAG 的流式版本，前端用它做打字机效果。
      */
     @GetMapping(value = "/chat/rag/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    @RateLimit(limit = 10, windowSeconds = 60)
+    @RateLimit(limit = 10, windowSeconds = 60, dimension = RateLimit.Dimension.USER)
     public Flux<String> chatWithRagSse(@RequestParam String message,
                                        @RequestParam(required = false) String chatId) {
-        return jobApp.doChatWithRagByStream(message, resolveChatId(chatId), currentUserId());
+        try (var ignored = TokenUsageScene.open("知识库问答")) {
+            return jobApp.doChatWithRagByStream(message, resolveChatId(chatId), currentUserId());
+        }
     }
 
     /**

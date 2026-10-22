@@ -43,7 +43,7 @@ public class ConversationController {
      * 防止前端写错轮询逻辑把数据库打满。额度按「调用成本」定，这个口径比一刀切合理。
      */
     @GetMapping("/list")
-    @RateLimit(limit = 60, windowSeconds = 60)
+    @RateLimit(limit = 60, windowSeconds = 60, dimension = RateLimit.Dimension.USER)
     public List<Conversation> list() {
         return conversationService.list(UserContext.requireUserId());
     }

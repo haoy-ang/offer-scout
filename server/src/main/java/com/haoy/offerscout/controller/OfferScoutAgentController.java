@@ -3,18 +3,26 @@ package com.haoy.offerscout.controller;
 import cn.hutool.core.util.StrUtil;
 import com.haoy.offerscout.agent.OfferScoutAgent;
 import com.haoy.offerscout.auth.RequireLogin;
+import com.haoy.offerscout.common.BusinessException;
+import com.haoy.offerscout.config.AgentExecutorConfig;
+import com.haoy.offerscout.observability.TokenUsageScene;
 import com.haoy.offerscout.ratelimit.RateLimit;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskRejectedException;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * 求职规划 Agent 接口。
@@ -37,24 +45,50 @@ import java.util.concurrent.CompletableFuture;
 public class OfferScoutAgentController {
 
     private final ObjectProvider<OfferScoutAgent> agentProvider;
+    private final ThreadPoolTaskExecutor agentExecutor;
 
-    public OfferScoutAgentController(ObjectProvider<OfferScoutAgent> agentProvider) {
+    public OfferScoutAgentController(ObjectProvider<OfferScoutAgent> agentProvider,
+                                     @Qualifier(AgentExecutorConfig.AGENT_EXECUTOR)
+                                     ThreadPoolTaskExecutor agentExecutor) {
         this.agentProvider = agentProvider;
+        this.agentExecutor = agentExecutor;
+    }
+
+    public record AgentRunRequest(String message) {}
+
+    /**
+     * 同步执行（POST 方式）：通过请求体传递任务描述。
+     * 解决 GET 请求中文长描述撞 URL 限制及网络预取/重放带来的昂贵副作用（P2-1）。
+     */
+    @PostMapping("/run")
+    @RateLimit(limit = 3, windowSeconds = 60, dimension = RateLimit.Dimension.USER,
+            message = "Agent 任务比较耗资源，每分钟最多发起 3 次，请稍后再试。")
+    public String runPost(@RequestBody AgentRunRequest request) {
+        String msg = request != null ? request.message() : null;
+        return executeAgentSync(msg);
     }
 
     /**
-     * 同步执行：等 Agent 跑完整个循环再一次性返回最终结论。
-     * 适合接口调试；Agent 可能跑好几步，请给足超时时间。
+     * 同步执行（GET 方式）：保留用于浏览器轻量级调试，内部复用相同逻辑。
      */
     @GetMapping("/run")
-    @RateLimit(limit = 3, windowSeconds = 60, message = "Agent 任务比较耗资源，每分钟最多发起 3 次，请稍后再试。")
+    @RateLimit(limit = 3, windowSeconds = 60, dimension = RateLimit.Dimension.USER,
+            message = "Agent 任务比较耗资源，每分钟最多发起 3 次，请稍后再试。")
     public String run(@RequestParam String message) {
+        return executeAgentSync(message);
+    }
+
+    private String executeAgentSync(String message) {
         if (StrUtil.isBlank(message)) {
             return "任务描述不能为空";
         }
         OfferScoutAgent agent = agentProvider.getObject();
         long start = System.currentTimeMillis();
-        String answer = agent.run(message);
+        String answer;
+        // 同步接口在请求线程上直接跑，场景就标在这里
+        try (var ignored = TokenUsageScene.open("作战规划")) {
+            answer = agent.run(message);
+        }
         log.info("Agent 任务结束，共 {} 步，耗时 {} 秒", agent.getCurrentStep(),
                 (System.currentTimeMillis() - start) / 1000.0);
         return answer;
@@ -71,7 +105,8 @@ public class OfferScoutAgentController {
      * 而 preHandle 跑在请求线程上 —— 校验已经完成，异步里不需要再判一次。
      */
     @GetMapping(value = "/run/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    @RateLimit(limit = 3, windowSeconds = 60, message = "Agent 任务比较耗资源，每分钟最多发起 3 次，请稍后再试。")
+    @RateLimit(limit = 3, windowSeconds = 60, dimension = RateLimit.Dimension.USER,
+            message = "Agent 任务比较耗资源，每分钟最多发起 3 次，请稍后再试。")
     public SseEmitter runSse(@RequestParam String message) {
         SseEmitter emitter = new SseEmitter(300_000L);
         OfferScoutAgent agent = agentProvider.getObject();
@@ -94,28 +129,42 @@ public class OfferScoutAgentController {
             }
         });
 
-        CompletableFuture.runAsync(() -> {
-            try {
-                // Agent 循环是阻塞的，必须放在独立线程里跑，否则会占住请求线程
-                emitter.send(agent.run(message));
-                emitter.complete();
-            } catch (IOException e) {
-                // 客户端断开时这里必然抛：AsyncRequestNotUsableException 就是 IOException 的子类，
-                // 语义是"响应已经不可用了"。这属于正常现象（结果没人接收），于是：
-                //   ① 不打 ERROR —— 否则日志里堆一堆看着吓人、其实无事发生的假故障；
-                //   ② 不 completeWithError —— 那是在已经废掉的响应上再写一次，
-                //      异常会二次抛给容器，同一个原因在日志里刷两遍栈（实测确认过）。
-                log.debug("SSE 客户端已断开，丢弃最终结果", e);
-                completeQuietly(emitter);
-            } catch (Exception e) {
-                log.error("Agent 流式执行失败", e);
+        try {
+            agentExecutor.execute(() -> {
                 try {
-                    emitter.completeWithError(e);
-                } catch (Exception ignored) {
-                    // 响应可能已不可用，二次失败没有补救手段，忽略
+                    // ⚠️ 场景必须在这个线程里标（不是 Controller 方法开头）：
+                    // Agent 跑在 agentExecutor 的线程上，ThreadLocal 不跨线程，
+                    // 在请求线程上 open 的话这里读到的是 null，记账会全落到 unknown
+                    try (var scene = TokenUsageScene.open("作战规划")) {
+                        emitter.send(agent.run(message));
+                    }
+                    emitter.complete();
+                } catch (IOException e) {
+                    // 客户端断开时这里必然抛：AsyncRequestNotUsableException 就是 IOException 的子类，
+                    // 语义是"响应已经不可用了"。这属于正常现象（结果没人接收），于是：
+                    //   ① 不打 ERROR —— 否则日志里堆一堆看着吓人、其实无事发生的假故障；
+                    //   ② 不 completeWithError —— 那是在已经废掉的响应上再写一次，
+                    //      异常会二次抛给容器，同一个原因在日志里刷两遍栈（实测确认过）。
+                    log.debug("SSE 客户端已断开，丢弃最终结果", e);
+                    completeQuietly(emitter);
+                } catch (Exception e) {
+                    log.error("Agent 流式执行失败", e);
+                    try {
+                        emitter.completeWithError(e);
+                    } catch (Exception ignored) {
+                        // 响应可能已不可用，二次失败没有补救手段，忽略
+                    }
                 }
-            }
-        });
+            });
+        } catch (TaskRejectedException e) {
+            // 线程池满了（线程和队列都到上限）。这里必须"快速失败"而不是排队：
+            // 排队的结果是用户干等 300 秒后拿到一个 SSE 超时，既不知道发生了什么，token 还照烧。
+            // 此刻方法尚未返回，所以抛出的异常仍会被 GlobalExceptionHandler 正常翻译成 429。
+            log.warn("Agent 线程池已满，本次请求被拒绝（这是保护动作，不是故障）");
+            completeQuietly(emitter);
+            throw new BusinessException(HttpStatus.TOO_MANY_REQUESTS,
+                    "当前同时在跑的任务太多了，请稍后再试。");
+        }
 
         return emitter;
     }

@@ -1,5 +1,6 @@
 package com.haoy.offerscout.ratelimit;
 
+import com.haoy.offerscout.auth.UserContext;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -205,5 +206,65 @@ class RateLimitInterceptorTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         boolean passed = interceptor.preHandle(request, response, handlerMethod);
         return new CallResult(passed, response);
+    }
+
+    /** 指定对端 IP 与伪造的 X-Forwarded-For，其余同上 */
+    private static CallResult fireWith(HandlerMethod handlerMethod, String remoteAddr, String forwardedFor)
+            throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/test/x");
+        request.setRemoteAddr(remoteAddr);
+        if (forwardedFor != null) {
+            request.addHeader("X-Forwarded-For", forwardedFor);
+        }
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        boolean passed = interceptor.preHandle(request, response, handlerMethod);
+        return new CallResult(passed, response);
+    }
+
+    /** 按 userId 计数的样例 */
+    static class UserDimensionController {
+        @RateLimit(limit = 2, windowSeconds = 60, dimension = RateLimit.Dimension.USER)
+        public String limited() {
+            return "ok";
+        }
+    }
+
+    @Test
+    @DisplayName("USER 维度：额度跟着登录用户走，换 IP 也重置不了")
+    void userDimensionCountsPerUserNotPerIp() throws Exception {
+        Method method = UserDimensionController.class.getMethod("limited");
+        HandlerMethod handlerMethod = new HandlerMethod(new UserDimensionController(), method);
+
+        try {
+            // 用户 1：三次请求故意来自三个不同 IP
+            UserContext.set(new UserContext.Principal(1L, "jti-1", Long.MAX_VALUE));
+            assertThat(fireWith(handlerMethod, "10.0.1.1", null).passed()).isTrue();
+            assertThat(fireWith(handlerMethod, "10.0.1.2", null).passed()).isTrue();
+            assertThat(fireWith(handlerMethod, "10.0.1.3", null).passed())
+                    .as("同一用户换 IP 仍应受限 —— 否则换个代理就能无限刷")
+                    .isFalse();
+
+            // 用户 2：用同一个 IP，额度是全新的
+            UserContext.set(new UserContext.Principal(2L, "jti-2", Long.MAX_VALUE));
+            assertThat(fireWith(handlerMethod, "10.0.1.1", null).passed())
+                    .as("同 IP 的不同用户不该共享额度")
+                    .isTrue();
+        } finally {
+            UserContext.clear();
+        }
+    }
+
+    @Test
+    @DisplayName("默认不信任 X-Forwarded-For：伪造该头绕不过限流")
+    void forgedForwardedHeaderCannotBypassRateLimit() throws Exception {
+        Method method = SampleController.class.getMethod("limited");
+        HandlerMethod handlerMethod = new HandlerMethod(new SampleController(), method);
+
+        // 每次伪造一个不同的 XFF，但 TCP 对端地址不变 —— 应该被正常计数并拦住
+        assertThat(fireWith(handlerMethod, "10.0.2.1", "203.0.113.1").passed()).isTrue();
+        assertThat(fireWith(handlerMethod, "10.0.2.1", "203.0.113.2").passed()).isTrue();
+        assertThat(fireWith(handlerMethod, "10.0.2.1", "203.0.113.3").passed())
+                .as("X-Forwarded-For 被信任了 —— 客户端编个 IP 就能绕过全部限流")
+                .isFalse();
     }
 }

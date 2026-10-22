@@ -127,4 +127,35 @@ class StructuredOutputRetryTest {
         // 那样用户看到的是 500 + 英文堆栈，而不是一句可读的中文提示。
         assertTrue(ex.getMessage().contains("可用"), "应转换成面向用户的提示");
     }
+
+    @Test
+    @DisplayName("业务异常不该重试：同样的输入重试三次结果一样，只是多花三次钱")
+    void shouldNotRetryBusinessException() {
+        AtomicInteger calls = new AtomicInteger();
+
+        BusinessException thrown = assertThrows(BusinessException.class, () ->
+                StructuredOutputRetry.call("测试", () -> {
+                    calls.incrementAndGet();
+                    throw new BusinessException(org.springframework.http.HttpStatus.UNAUTHORIZED, "请先登录");
+                }, ANY));
+
+        // 关键点：必须是原异常直接冒出去，不能被包装成"模型连续 3 次没返回可用结果"。
+        // 否则鉴权失败会被说成模型抽风，用户和排查的人都被误导。
+        assertEquals("请先登录", thrown.getMessage());
+        assertEquals(1, calls.get(), "业务异常重试了 —— 白白多烧两次模型调用");
+    }
+
+    @Test
+    @DisplayName("代码 bug（NPE）不该重试：它不是模型的问题，重试只会把 bug 藏起来")
+    void shouldNotRetryCodeBug() {
+        AtomicInteger calls = new AtomicInteger();
+
+        assertThrows(NullPointerException.class, () ->
+                StructuredOutputRetry.call("测试", () -> {
+                    calls.incrementAndGet();
+                    throw new NullPointerException("空指针来自我们自己的代码");
+                }, ANY));
+
+        assertEquals(1, calls.get(), "NPE 被当成模型格式错误重试了 —— 真正的 bug 会被伪装成'模型不稳定'");
+    }
 }
