@@ -1,0 +1,105 @@
+name: nightly-ai-eval
+
+# 为什么需要这条流水线？
+#   backend-ci 把 @Tag("requires-ai") 全部排除了 —— 因为它要真实 API Key、要花钱、还要跑十几分钟。
+#   这很合理，但它留下一个盲区：**最核心的 AI 链路（Agent 循环 / 问答 / RAG / 两个评测）一次都没在 CI 里跑过。**
+#   结果就是"CI 绿"只证明"不烧钱的代码没坏"，不证明 AI 功能是好的。
+#   折中做法：日常 CI 保持快和免费；AI 档放这里，每天一次 + 可手动触发。
+#   这样一来，「我做过实验」就变成了「我每天在跑实验」，评估报告还自动留档。
+on:
+  schedule:
+    # UTC 18:00 = 北京时间次日 02:00，避开白天的提交高峰，也不跟 backend-ci 抢配额
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  ai-eval:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    # requires-ai 档里也有带 @SpringBootTest 的用例（Agent / 持久化），需要真实 MySQL + Redis
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: offer_scout
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      SPRING_PROFILES_ACTIVE: ci
+      # application-ci.yml 里是占位密钥（入库存的），这里用 env 覆盖成真密钥。
+      # Spring Boot 的环境变量优先级高于配置文件 → SPRING_AI_DASHSCOPE_API_KEY 覆盖
+      # spring.ai.dashscope.api-key，不用改任何 yml。
+      SPRING_AI_DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+
+    # 超时兜底：judge 全量是 45 条 × 两次模型调用，本地实测 23~40 分钟（看上游当时快慢），
+    # 加上阈值扫表（76s）和其余 AI 用例，整档 45 分钟上下。给到 90 分钟留余量，
+    # 卡死时不要让它一直占 runner（GitHub 默认上限 6 小时，那是纯浪费）。
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: server/pom.xml
+
+      # 没配 secret 时直接给出人能看懂的失败原因。
+      # 否则会得到一堆 401，看起来像代码坏了，实际是仓库没配 key —— 这种"假故障"最费时间。
+      - name: Check API key is configured
+        run: |
+          if [ -z "$SPRING_AI_DASHSCOPE_API_KEY" ]; then
+            echo "::error::缺少 DASHSCOPE_API_KEY secret。请在仓库 Settings → Secrets and variables → Actions 里添加。"
+            exit 1
+          fi
+          echo "API key 已配置（长度 ${#SPRING_AI_DASHSCOPE_API_KEY}，不打印内容）"
+
+      # -Dgroups 是"只跑这一档"（和 backend-ci 的 -DexcludedGroups 正好相反）。
+      # 注意 judge 全量要用 -Djudge.samples=45，默认只跑 5 条 —— nightly 当然要全量。
+      - name: Run AI-tier tests (requires-ai)
+        run: mvn -B -ntp test -Dgroups=requires-ai -Djudge.samples=45
+
+      # 评估报告写在 server/target/eval-reports/*.md（UTF-8，测试内直接落盘）。
+      # target/ 是构建目录、git 不跟踪 —— 所以必须上传成 artifact，
+      # 否则每次跑完报告就随 runner 一起销毁，"做过实验"依然拿不出证据。
+      - name: Upload eval reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports-${{ github.run_number }}
+          path: server/target/eval-reports/
+          if-no-files-found: warn
+          retention-days: 30
+
+      # 失败时把 surefire 报告也带上：看是哪个用例红了，比翻被折叠的日志快得多
+      - name: Upload surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports-${{ github.run_number }}
+          path: server/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
