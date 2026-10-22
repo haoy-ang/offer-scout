@@ -73,15 +73,28 @@ public class JobApp {
             ## 边界
             - 你聚焦技术岗求职，遇到无关话题礼貌地拉回正题。
             - 不编造用户没有的经历，信息不确定时向用户确认。
+            - **具体技术事实只给有依据的**。下面这几类内容，如果参考资料里没有、你也不确定，
+              就明说「这一点我这边没有确切依据，建议按你项目的实际情况填」，不要给一个看起来合理的值：
+              · 版本号（如「Nacos 2.2」「Seata 1.8」）
+              · 依赖坐标与配置项全名（如「feign.client.config.default.connectTimeout」）
+              · 百分比、毫秒数这类量化指标（如「命中率从 72% 提升到 99.3%」）
+              · 具体报错信息、行号、类名
+              理由：用户会拿这些直接写进简历、答面试。**编出来的细节比少给一个细节伤害大得多** ——
+              面试官追问一句"这个数怎么测的"，穿帮的是用户，不是我们。
+            - 用户问「要写什么指标」时，给**方法**而不是替他**编数字**：
+              例如"用 JMeter 压 200 并发，记录 P99 和 QPS，把实测值填进去"。
             """;
 
-    public JobApp(ChatModel dashscopeChatModel,
-                  SimpleVectorStore jobVectorStore,
-                  ChatMemory chatMemory,
-                  ConversationService conversationService) {
-        this(dashscopeChatModel, jobVectorStore, chatMemory, conversationService, 0.0);
-    }
-
+    /**
+     * ⚠️ 不要为了写测试方便再加一个「少一个参数」的便利构造器。
+     * <p>
+     * 这里曾经有一个 4 参构造器，内部写死 {@code this(..., 0.0)} —— 而全仓库没有任何调用者。
+     * 它是个陷阱：阈值真相只有两处（`application.yml` + 下面 {@code @Value} 的兜底默认值），
+     * 多一个构造器就多一个"看起来一样、实际是旧值 0.0"的入口。
+     * 将来谁写单测顺手用了它，就会静默测出与线上不一致的行为，而且很难查。
+     * <p>
+     * 需要换阈值就传参；不想传就用 Spring 注入的那条路径。
+     */
     @org.springframework.beans.factory.annotation.Autowired
     public JobApp(ChatModel dashscopeChatModel,
                   SimpleVectorStore jobVectorStore,
@@ -133,6 +146,8 @@ public class JobApp {
                 : response.getResult().getOutput().getText();
         log.info("chatId={} 用户{}: {} | 回复: {}", chatId, userId, message, content);
 
+        // 归档「这一轮」，归档表才是归档页的数据源（上下文窗口会被裁剪到 50 条）
+        conversationService.archiveTurn(chatId, message, content);
         conversationService.refreshMessageCount(chatId);
         return content;
     }
@@ -151,14 +166,23 @@ public class JobApp {
         // 而不是一条"流里突然冒出个错误"的 SSE。
         conversationService.ensureExists(chatId, message, userId);
 
+        // 流式接口没有"返回值"可以拿来归档，所以边推边攒：
+        // doOnNext 收到的是增量片段，doOnComplete 时拼成完整回答再落归档。
+        // Reactor 保证同一个 Flux 的 onNext 是串行的，所以 StringBuilder 不需要加锁。
+        StringBuilder answer = new StringBuilder();
+
         return chatClient.prompt()
                 .user(message)
                 .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, chatId))
                 .stream()
                 .content()
-                // 流是懒执行的：必须等它真正跑完，消息才写入记忆，这时回读条数才有意义
+                .doOnNext(answer::append)
+                // 流是懒执行的：必须等它真正跑完，消息才写入记忆，这时回读条数才有意义。
                 // 注意这里跑在 Reactor 线程上，所以只用 chatId，不碰 UserContext
-                .doOnComplete(() -> conversationService.refreshMessageCount(chatId));
+                .doOnComplete(() -> {
+                    conversationService.archiveTurn(chatId, message, answer.toString());
+                    conversationService.refreshMessageCount(chatId);
+                });
     }
 
     /**
@@ -188,6 +212,7 @@ public class JobApp {
                 : response.getResult().getOutput().getText();
         log.info("chatId={} [RAG] 用户{}: {} | 回复: {}", chatId, userId, message, content);
 
+        conversationService.archiveTurn(chatId, message, content);
         conversationService.refreshMessageCount(chatId);
         return content;
     }
@@ -206,6 +231,9 @@ public class JobApp {
     public Flux<String> doChatWithRagByStream(String message, String chatId, long userId) {
         conversationService.ensureExists(chatId, message, userId);
 
+        // 同 doChatByStream：流式回答靠边推边攒，完成时才归档
+        StringBuilder answer = new StringBuilder();
+
         return chatClient.prompt()
                 .user(message)
                 .advisors(spec -> spec
@@ -213,6 +241,10 @@ public class JobApp {
                         .param(ChatMemory.CONVERSATION_ID, chatId))
                 .stream()
                 .content()
-                .doOnComplete(() -> conversationService.refreshMessageCount(chatId));
+                .doOnNext(answer::append)
+                .doOnComplete(() -> {
+                    conversationService.archiveTurn(chatId, message, answer.toString());
+                    conversationService.refreshMessageCount(chatId);
+                });
     }
 }
