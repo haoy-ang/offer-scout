@@ -71,6 +71,9 @@ class ConversationPersistenceTest {
         // 走业务方法会判定为"别人的会话"而拒绝删除 —— 清理这种历史遗留数据，
         // 正该用 SQL 直连数据库，而不是绕过校验（也绝不能为了测试去掉校验）。
         jdbcTemplate.update("DELETE FROM conversation WHERE id = ?", CHAT_ID);
+        // 归档表也要清：它 append-only、不受记忆窗口影响，不清的话每跑一次就多一轮，
+        // 归档页会累积出重复对话（这条正是"归档与上下文解耦"之后的连带清理责任）
+        jdbcTemplate.update("DELETE FROM chat_message WHERE conversation_id = ?", CHAT_ID);
         chatMemory.clear(CHAT_ID);
 
         String reply = jobApp.doChat(
@@ -80,6 +83,14 @@ class ConversationPersistenceTest {
         System.out.println("AI 回复: " + reply);
         System.out.println("记忆条数: " + chatMemory.get(CHAT_ID).size());
         Assertions.assertTrue(chatMemory.get(CHAT_ID).size() >= 2, "至少应该存下用户消息和助手回复");
+
+        // 归档验证：真实链路跑完一轮，归档表必须落下一问一答两条。
+        // 这条断言守住的是"归档写在业务路径上"，不是写在某个只在测试里调用的方法里 ——
+        // 少了它，即使 archiveTurn 实现是空的，上面的记忆断言也照样绿。
+        Integer archived = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM chat_message WHERE conversation_id = ?", Integer.class, CHAT_ID);
+        Assertions.assertTrue(archived != null && archived >= 2,
+                "一轮对话应该归档两条（用户问题 + 助手回答），实际：" + archived);
     }
 
     @Test
@@ -95,6 +106,13 @@ class ConversationPersistenceTest {
         Assertions.assertTrue(
                 messages.stream().anyMatch(m -> m.getText() != null && m.getText().contains(SECRET)),
                 "应该能读到上一轮写入的暗号内容：" + SECRET);
+
+        // 归档页走的是 getMessages（数据源 = chat_message），和上面直接读 chatMemory 是两条路。
+        // 两条都要能读到暗号，才说明"给模型看的"和"给人看的"都没丢。
+        List<Message> archived = conversationService.getMessages(CHAT_ID, USER_ID);
+        Assertions.assertTrue(
+                archived.stream().anyMatch(m -> m.getText() != null && m.getText().contains(SECRET)),
+                "归档页（getMessages）也应该能读到暗号内容");
 
         Optional<Conversation> conversation = conversationService.list(USER_ID).stream()
                 .filter(c -> CHAT_ID.equals(c.id()))

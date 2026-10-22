@@ -47,14 +47,16 @@ class ConversationServiceOwnershipTest {
     private static final String CHAT_ID = "conv-001";
 
     private ConversationRepository repository;
+    private ChatArchiveRepository archiveRepository;
     private ChatMemory chatMemory;
     private ConversationService service;
 
     @BeforeEach
     void setUp() {
         repository = mock(ConversationRepository.class);
+        archiveRepository = mock(ChatArchiveRepository.class);
         chatMemory = mock(ChatMemory.class);
-        service = new ConversationService(repository, chatMemory);
+        service = new ConversationService(repository, archiveRepository, chatMemory);
     }
 
     private Conversation ownedBy(long userId) {
@@ -125,8 +127,9 @@ class ConversationServiceOwnershipTest {
                 () -> service.getMessages(CHAT_ID, ALICE));
         assertEquals(HttpStatus.FORBIDDEN, e.getStatus());
 
-        // 关键断言：既然被拒绝了，就不该再去碰记忆 —— 一次都不行
+        // 关键断言：既然被拒绝了，就不该再去碰任何数据源 —— 一次都不行
         verify(chatMemory, never()).get(anyString());
+        verify(archiveRepository, never()).findByConversationId(anyString());
     }
 
     @Test
@@ -148,6 +151,30 @@ class ConversationServiceOwnershipTest {
         when(chatMemory.get(CHAT_ID)).thenReturn(stored);
 
         assertEquals(stored, service.getMessages(CHAT_ID, ALICE));
+    }
+
+    @Test
+    @DisplayName("getMessages：归档有数据时只读归档，不读上下文窗口（这就是 P1-6 的修复点）")
+    void getMessages_prefersArchiveOverWindow() {
+        when(repository.findById(CHAT_ID)).thenReturn(Optional.of(ownedBy(ALICE)));
+        List<Message> archived = List.of(new AssistantMessage("第 1 轮"), new AssistantMessage("第 100 轮"));
+        when(archiveRepository.findByConversationId(CHAT_ID)).thenReturn(archived);
+
+        assertEquals(archived, service.getMessages(CHAT_ID, ALICE), "归档页必须拿到全量历史");
+        // 关键断言：读到归档之后就不该再去碰上下文窗口 ——
+        // 窗口最多 50 条，一旦被当成历史展示，用户聊到第 26 轮前面的就没了
+        verify(chatMemory, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("getMessages：归档为空时回落读上下文窗口（兼容上线前的老会话）")
+    void getMessages_fallsBackToWindowWhenArchiveEmpty() {
+        when(repository.findById(CHAT_ID)).thenReturn(Optional.of(ownedBy(ALICE)));
+        when(archiveRepository.findByConversationId(CHAT_ID)).thenReturn(List.of());
+        List<Message> legacy = List.of(new AssistantMessage("老会话里的消息"));
+        when(chatMemory.get(CHAT_ID)).thenReturn(legacy);
+
+        assertEquals(legacy, service.getMessages(CHAT_ID, ALICE));
     }
 
     /* ---------------- list：只能看见自己的 ---------------- */
@@ -175,6 +202,8 @@ class ConversationServiceOwnershipTest {
 
         assertTrue(service.delete(CHAT_ID, ALICE));
         verify(chatMemory).clear(CHAT_ID);
+        // 归档也要清：只清记忆不清归档，删掉的会话还能在归档页点开看到
+        verify(archiveRepository).deleteByConversationId(CHAT_ID);
     }
 
     @Test
@@ -188,6 +217,7 @@ class ConversationServiceOwnershipTest {
 
         verify(repository, never()).deleteByIdAndUserId(anyString(), anyLong());
         verify(chatMemory, never()).clear(anyString());
+        verify(archiveRepository, never()).deleteByConversationId(anyString());
     }
 
     @Test
@@ -216,5 +246,27 @@ class ConversationServiceOwnershipTest {
         doThrow(new RuntimeException("deadlock"))
                 .when(repository).updateMessageCount(anyString(), anyInt());
         service.refreshMessageCount(CHAT_ID);
+    }
+
+    @Test
+    @DisplayName("refreshMessageCount：条数来自归档表，不是上下文窗口 —— 聊到 100 轮就显示 200 条")
+    void refreshMessageCount_countsArchiveNotWindow() {
+        // 归档 200 条，窗口只有 50 条：这正是修复前的症状
+        when(archiveRepository.countByConversationId(CHAT_ID)).thenReturn(200);
+
+        service.refreshMessageCount(CHAT_ID);
+
+        verify(repository).updateMessageCount(CHAT_ID, 200);
+        verify(chatMemory, never()).get(anyString());
+    }
+
+    @Test
+    @DisplayName("archiveTurn：归档写入失败只记日志，不能把已经成功的对话变成失败")
+    void archiveTurn_swallowsFailure() {
+        doThrow(new RuntimeException("table is full"))
+                .when(archiveRepository).appendTurn(anyString(), anyString(), anyString());
+
+        // 不抛异常即通过：模型已经答完了，用户必须拿到那段回答
+        service.archiveTurn(CHAT_ID, "问题", "回答");
     }
 }

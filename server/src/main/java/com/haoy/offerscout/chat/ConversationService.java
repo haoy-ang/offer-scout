@@ -15,9 +15,16 @@ import java.util.Optional;
 /**
  * 会话业务逻辑。
  * <p>
- * 把「会话元数据」（自己维护的 conversation 表）和「会话消息」（Spring AI 的
- * JdbcChatMemoryRepository）这两份状态放在一起管理，
- * 上层（JobApp / Controller）只跟本类打交道，不直接碰仓储。
+ * 本类管三份状态，它们看着像一回事，其实是三件事：
+ * <ul>
+ *   <li><b>会话元数据</b>（{@code conversation} 表）：标题、归属、消息数、最后活跃时间。</li>
+ *   <li><b>全量归档</b>（{@code chat_message} 表，{@link ChatArchiveRepository}）：
+ *       用户看得见的「历史记录」，append-only，永不裁剪。</li>
+ *   <li><b>上下文窗口</b>（Spring AI 的 {@code ChatMemory}）：模型这一轮要带进去的历史，
+ *       被滑动窗口裁到最近 N 条。</li>
+ * </ul>
+ * 前两份是"给人看的"，第三份是"给模型看的" —— <b>混用会直接变成产品缺陷</b>：
+ * 拿上下文窗口当历史展示，用户聊到第 26 轮就发现前面的全没了。
  * <p>
  * <b>本类也是会话越权校验的唯一入口。</b>原因在于"会话 ID 是前端传上来的"这件事：
  * 只要有人拿到（或猜到）一个别人的会话 ID，就能靠它读写别人的聊天记录 ——
@@ -32,11 +39,36 @@ public class ConversationService {
     private static final int TITLE_MAX_LENGTH = 30;
 
     private final ConversationRepository conversationRepository;
+    private final ChatArchiveRepository archiveRepository;
     private final ChatMemory chatMemory;
 
-    public ConversationService(ConversationRepository conversationRepository, ChatMemory chatMemory) {
+    public ConversationService(ConversationRepository conversationRepository,
+                               ChatArchiveRepository archiveRepository,
+                               ChatMemory chatMemory) {
         this.conversationRepository = conversationRepository;
+        this.archiveRepository = archiveRepository;
         this.chatMemory = chatMemory;
+    }
+
+    /**
+     * 归档一轮对话（用户问题 + AI 回答）。
+     * <p>
+     * <b>这是「归档」而不是「记忆」，两者的裁剪策略相反：</b>
+     * 记忆（ChatMemory）会被滑动窗口裁到最近 50 条，供模型当上下文用；
+     * 归档（chat_message）永久保留，供归档页回放。
+     * 原先只有记忆，所以归档页最多只能显示 50 条 —— 那不是"上下文只带 50 条"的小问题，
+     * 是用户看得见的历史被悄悄截断了。
+     * <p>
+     * <b>失败只记日志，不影响对话</b>：归档是附加能力，
+     * 它挂掉时对话本身仍然成功（模型已经答完了）。把归档失败抛出去，
+     * 用户会看到"回答失败"却拿不到已经生成的内容，那是更糟的取舍。
+     */
+    public void archiveTurn(String conversationId, String userText, String assistantText) {
+        try {
+            archiveRepository.appendTurn(conversationId, userText, assistantText);
+        } catch (Exception e) {
+            log.warn("对话归档写入失败，conversationId={}", conversationId, e);
+        }
     }
 
     /**
@@ -81,17 +113,23 @@ public class ConversationService {
     }
 
     /**
-     * 用记忆里实际的条数刷新计数。
+     * 用归档表里实际的条数刷新计数。
      * <p>
-     * 为什么不「+2」而是回读真实条数？因为记忆是滑动窗口，
-     * 条数到上限后不再增长，靠自增会把数字算错。
+     * 为什么不再读 {@code chatMemory.get(id).size()}？因为那是**窗口内**的条数，
+     * 满了就不再增长 —— 会话列表里会显示"50 条消息"，而实际聊了 200 轮。
+     * 展示给用户的数字必须来自归档表。
+     * <p>
+     * 回落到记忆条数是给**上线前的老会话**留的兼容：它们的消息只存在于框架那张表里，
+     * 归档表是空的。宁可显示窗口条数，也不要显示 0。
      * <p>
      * 这里不做归属校验：它只在 {@link #ensureExists} 之后、同一次请求内被调用，
      * 归属在那一刻已经确认过了，重复查一次只是多一次无用 SQL。
      */
     public void refreshMessageCount(String conversationId) {
         try {
-            conversationRepository.updateMessageCount(conversationId, chatMemory.get(conversationId).size());
+            int archived = archiveRepository.countByConversationId(conversationId);
+            int count = archived > 0 ? archived : chatMemory.get(conversationId).size();
+            conversationRepository.updateMessageCount(conversationId, count);
         } catch (Exception e) {
             log.warn("会话计数刷新失败，conversationId={}", conversationId, e);
         }
@@ -103,13 +141,22 @@ public class ConversationService {
     }
 
     /**
-     * 读取某个会话的记忆消息。
+     * 读取某个会话的**全部**历史消息（归档页用）。
+     * <p>
+     * 数据源是归档表，不是 {@link ChatMemory} —— 这一点是本方法的核心。
+     * 记忆是给模型用的上下文窗口（最多 50 条），拿它当历史展示等于让用户
+     * "聊到第 26 轮，前面就没了"。
+     * <p>
+     * 归档为空时回落到记忆：兼容上线前的老会话（消息只在框架那张表里）。
+     * 回落是**一次性**的兼容，不是长期双读 —— 老会话不会再有新消息进来
+     * （用户下次说话时那一轮会写进归档，之后就走归档了）。
      *
      * @throws BusinessException 会话不存在（404）或不属于该用户（403）
      */
     public List<Message> getMessages(String conversationId, long userId) {
         requireOwned(conversationId, userId);
-        return chatMemory.get(conversationId);
+        List<Message> archived = archiveRepository.findByConversationId(conversationId);
+        return archived.isEmpty() ? chatMemory.get(conversationId) : archived;
     }
 
     /**
@@ -131,8 +178,13 @@ public class ConversationService {
                     conversationId, existing.get().userId(), userId);
             throw new BusinessException(HttpStatus.FORBIDDEN, "无权访问该会话");
         }
+        // 两处都要清，缺一不可：
+        // · 只清归档 → 会话列表没了，但模型下一轮还记得刚才聊了什么（灵异上下文）
+        // · 只清记忆 → 归档页点进去还能看到"已删除"的对话
+        int deleted = conversationRepository.deleteByIdAndUserId(conversationId, userId);
+        archiveRepository.deleteByConversationId(conversationId);
         chatMemory.clear(conversationId);
-        return conversationRepository.deleteByIdAndUserId(conversationId, userId) > 0;
+        return deleted > 0;
     }
 
     /**

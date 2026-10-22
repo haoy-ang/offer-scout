@@ -61,6 +61,31 @@ CREATE TABLE IF NOT EXISTS conversation
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4 COMMENT ='会话元数据';
 
+-- 对话全量归档表（产品侧「历史记录」的唯一数据源）
+-- 为什么要这张表？因为 SPRING_AI_CHAT_MEMORY 存的是**上下文窗口**，不是历史：
+--   MessageWindowChatMemory 保存时会用「裁剪后的最近 N 条」覆盖原内容，
+--   所以那张表里最多只有 maxMessages（本项目 50）条 —— 归档页滚到第 50 条就断了。
+-- 正确做法是**把「上下文」和「归档」拆成两件事**：
+--   · 上下文：继续用 SPRING_AI_CHAT_MEMORY + 滑动窗口，省 token，够模型用就行；
+--   · 归档  ：本表 append-only，永不裁剪，归档页只读它。
+-- 为什么不建外键指向 conversation？
+--   删除会话时由业务代码按 conversation_id 显式清理（见 ConversationService#delete）。
+--   加外键会让「先删元数据还是先删消息」的顺序变成硬约束，且并发删除时容易撞约束报错；
+--   会话 ID 是 UUID、生命周期完全由本应用控制，外键在这里带来的是耦合而不是保护。
+CREATE TABLE IF NOT EXISTS chat_message
+(
+    id              BIGINT      NOT NULL AUTO_INCREMENT COMMENT '自增主键，同时充当同会话内的顺序号',
+    conversation_id VARCHAR(64) NOT NULL COMMENT '会话 ID，对应 conversation.id',
+    role            VARCHAR(16) NOT NULL COMMENT 'USER / ASSISTANT / SYSTEM',
+    content         MEDIUMTEXT  NOT NULL COMMENT '消息正文（纯文本；框架那张表存的是 JSON，这张表只存给人看的文本）',
+    created_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '写入时间，毫秒精度保证同秒内也有序',
+    PRIMARY KEY (id),
+    -- 归档页的查询形态就是「按会话取全部，按写入顺序排」→ (conversation_id, id) 一条索引全覆盖，
+    -- 且 InnoDB 二级索引自带主键，回表都不需要（覆盖索引）
+    KEY idx_conv_id (conversation_id, id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4 COMMENT ='对话全量归档（append-only，不受上下文窗口裁剪影响）';
+
 -- -------------------------------------------------------------
 -- 关于「给已有表加列」这件事
 --
