@@ -76,8 +76,7 @@ public class ResumeService {
             return resumeParser.extractText(file);
         }
         if (StrUtil.isNotBlank(pastedText)) {
-            String text = pastedText.trim();
-            return text.length() > MAX_RESUME_CHARS ? text.substring(0, MAX_RESUME_CHARS) : text;
+            return TextTruncator.truncateGracefully(pastedText.trim(), MAX_RESUME_CHARS, "…（已截断）");
         }
         throw new BusinessException(HttpStatus.BAD_REQUEST, "请上传简历文件，或直接粘贴简历文本。");
     }
