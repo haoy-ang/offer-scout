@@ -55,6 +55,12 @@ offer-scout:
     # 改素材或换 embedding 模型后要重跑扫表，别沿用这个数。
     similarity-threshold: 0.55
 
+    # 断言校验（CitationChecker）：把回答里"资料中查不到出处"的百分比/量化指标/配置项标出来，
+    # 追在回答末尾提醒用户换成自己的实测值。
+    # 默认开。跑答案质量评测（RagAnswerQualityEvalTest）时会显式关掉 ——
+    # 否则 judge 看到的是"自带免责声明"的回答，分数会被提示本身抬高，测不出生成质量的真实变化。
+    citation-audit-enabled: true
+
 # 接口文档（Knife4j）
 springdoc:
   swagger-ui:

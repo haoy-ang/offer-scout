@@ -2,6 +2,7 @@ package com.haoy.offerscout.app;
 
 import com.haoy.offerscout.chat.ConversationService;
 import com.haoy.offerscout.common.TimeContext;
+import com.haoy.offerscout.rag.CitationAuditService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
@@ -41,6 +42,14 @@ public class JobApp {
 
     /** 用于回读真实消息条数（滑动窗口的条数不能靠自增推算） */
     private final ChatMemory chatMemory;
+
+    /**
+     * 断言校验：给"编出来的具体数值"加一道确定性兜底。
+     * <p>
+     * 只挂在 RAG 两条链路上。纯对话（{@link #doChat}）本来就不承诺基于资料作答，
+     * 那里标"查不到出处"等于给每句话都加免责声明，纯噪音。
+     */
+    private final CitationAuditService citationAuditService;
 
     /**
      * RAG Advisor：检索增强。
@@ -100,10 +109,12 @@ public class JobApp {
                   SimpleVectorStore jobVectorStore,
                   ChatMemory chatMemory,
                   ConversationService conversationService,
+                  CitationAuditService citationAuditService,
                   @org.springframework.beans.factory.annotation.Value("${offer-scout.rag.similarity-threshold:0.55}")
                   double similarityThreshold) {
         this.chatMemory = chatMemory;
         this.conversationService = conversationService;
+        this.citationAuditService = citationAuditService;
 
         // 检索配置：取相似度最高的 4 段；相似度阈值支持配置覆盖（经由 rag-eval-set 评估集调优）
         this.questionAnswerAdvisor = QuestionAnswerAdvisor.builder(jobVectorStore)
@@ -210,6 +221,14 @@ public class JobApp {
         String content = (response == null || response.getResult() == null)
                 ? null
                 : response.getResult().getOutput().getText();
+
+        // 事实层兜底：把"资料里查不到出处"的具体数值标出来。
+        // 放在归档之前 —— 归档要存用户真正看到的内容，否则回放时提示会凭空消失。
+        String caveat = citationAuditService.caveatFor(message, content);
+        if (caveat != null) {
+            content = content + caveat;
+        }
+
         log.info("chatId={} [RAG] 用户{}: {} | 回复: {}", chatId, userId, message, content);
 
         conversationService.archiveTurn(chatId, message, content);
@@ -242,6 +261,18 @@ public class JobApp {
                 .stream()
                 .content()
                 .doOnNext(answer::append)
+                // 事实层兜底。流式接口没法"回头改已经推出去的文本"，所以只能等在正文结束后
+                // 再补一段提示 —— 用 defer 是因为要等上游跑完才能拿到完整回答去校验。
+                // ⚠️ 这里刻意倒过来做：先把 caveat 塞进 answer 再 return，
+                // 否则 doOnComplete 归档的是「不含提示」的版本，回放时提示就丢了。
+                .concatWith(Flux.defer(() -> {
+                    String caveat = citationAuditService.caveatFor(message, answer.toString());
+                    if (caveat == null) {
+                        return Flux.<String>empty();
+                    }
+                    answer.append(caveat);
+                    return Flux.just(caveat);
+                }))
                 .doOnComplete(() -> {
                     conversationService.archiveTurn(chatId, message, answer.toString());
                     conversationService.refreshMessageCount(chatId);

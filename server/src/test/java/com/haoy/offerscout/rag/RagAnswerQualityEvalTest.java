@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -69,6 +70,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Tag("requires-ai")
 @SpringBootTest
 @ActiveProfiles("local")
+// 评测期间关掉「把提示追加到回答末尾」：judge 看到自带免责声明的回答会本能地给高分，
+// 那测出来的是"提示写得好不好"，不是"答案有没有变好"。校验逻辑本身照跑（audit() 不看开关）。
+@TestPropertySource(properties = "offer-scout.rag.citation-audit-enabled=false")
 @Slf4j
 class RagAnswerQualityEvalTest {
 
@@ -122,12 +126,34 @@ class RagAnswerQualityEvalTest {
     @Value("${offer-scout.rag.similarity-threshold:0.55}")
     private double similarityThreshold;
 
+    /**
+     * 断言校验器。这里直接调 {@code audit()} 而不是 {@code caveatFor()} ——
+     * 前者不受开关影响，后者会被上面的 {@code citation-audit-enabled=false} 短路。
+     * <p>
+     * 这一步是本次评测最想拿到的数据：**checker 在真实答案上到底拦得住多少、误伤多少**。
+     * 没有这两个数，就只是在"加了一层看起来能防编造的东西"，不是在解决问题。
+     */
+    @Autowired
+    private CitationAuditService citationAuditService;
+
     /** judge 的结构化输出 */
     public record JudgeVerdict(int score, boolean grounded, String reason) {
     }
 
-    private record EvalCase(int id, String question, String answer, JudgeVerdict verdict) {
+    private record EvalCase(int id, String question, String answer, JudgeVerdict verdict,
+                            int blockingCount, String flagged) {
     }
+
+    /**
+     * 上一次全量运行留下的「问题 + 回答 + 判分」。
+     * <p>
+     * <b>为什么要存这个？</b>因为调断言校验的正则时，要反复看"同一批答案在新规则下拦多少、误伤多少"。
+     * 每次为此重跑 45 条 = 21 分钟 + 90 次模型调用，而且**样本还不一样**（模型有随机性），
+     * 前后两轮的差异分不清是规则改的还是采样抖的。缓存下来之后：
+     * {@code -Dreplay=true} 只重算校验、不调模型，几秒钟出结果，且**是同一批答案**——
+     * 这才是能用来判断"规则 A 比规则 B 好在哪"的对照。
+     */
+    private static final Path ANSWER_CACHE = Path.of("target", "eval-reports", "answers-cache.jsonl");
 
     @Test
     @DisplayName("抽样跑 RAG 问答并让模型按 0-5 打分，输出平均分与低分样本")
@@ -136,29 +162,62 @@ class RagAnswerQualityEvalTest {
         List<String> questions = loadPositiveQuestions().stream().limit(samples).toList();
         assertThat(questions).as("评估集里必须有正样本").isNotEmpty();
 
+        boolean replay = Boolean.getBoolean("replay");
+        List<EvalCase> cached = replay ? loadAnswerCache() : List.of();
+        if (replay && cached.isEmpty()) {
+            log.warn("要求回放但 {} 不存在，改为真实调用", ANSWER_CACHE.toAbsolutePath());
+        }
+        log.info("========== RAG 答案质量评测（{} 条，{}） ==========",
+                questions.size(), replay ? "回放缓存" : "真实调用");
+
         ChatClient judgeClient = ChatClient.builder(chatModel).build();
         List<EvalCase> cases = new ArrayList<>();
 
-        log.info("========== RAG 答案质量评测（{} 条） ==========", questions.size());
         int id = 0;
         for (String question : questions) {
             id++;
             // lambda 只能捕获 effectively final 的变量，循环变量 id 会被改 → 先拷一份
             final int caseId = id;
-            String answer = callWithTimeout("作答#" + caseId,
-                    () -> jobApp.doChatWithRag(question, "eval-judge-" + caseId, 0L));
-            if (answer == null) {
-                cases.add(new EvalCase(caseId, question, "(超时/异常)", new JudgeVerdict(-1, false, "作答超时或调用异常")));
-                continue;
+
+            String answer;
+            JudgeVerdict verdict;
+            EvalCase hit = cached.stream().filter(c -> c.id() == caseId).findFirst().orElse(null);
+
+            if (hit != null) {
+                answer = hit.answer();
+                verdict = hit.verdict();
+            } else {
+                answer = callWithTimeout("作答#" + caseId,
+                        () -> jobApp.doChatWithRag(question, "eval-judge-" + caseId, 0L));
+                if (answer == null) {
+                    cases.add(new EvalCase(caseId, question, "(超时/异常)",
+                            new JudgeVerdict(-1, false, "作答超时或调用异常"), 0, ""));
+                    continue;
+                }
+                if (answer.isBlank()) {
+                    cases.add(new EvalCase(caseId, question, "(空回答)",
+                            new JudgeVerdict(0, false, "模型未返回内容"), 0, ""));
+                    continue;
+                }
+                verdict = callWithTimeout("评分#" + caseId,
+                        () -> judge(judgeClient, question, answer, retrieveContext(question)));
+                if (verdict == null) {
+                    verdict = new JudgeVerdict(-1, false, "评分超时");
+                }
             }
-            if (answer.isBlank()) {
-                cases.add(new EvalCase(caseId, question, "(空回答)", new JudgeVerdict(0, false, "模型未返回内容")));
-                continue;
-            }
-            JudgeVerdict verdict = callWithTimeout("评分#" + caseId,
-                    () -> judge(judgeClient, question, answer, retrieveContext(question)));
-            cases.add(new EvalCase(caseId, question, answer,
-                    verdict == null ? new JudgeVerdict(-1, false, "评分超时") : verdict));
+
+            // 断言校验每次都重算 —— 这正是回放模式的意义：同一批答案，换规则看差异。
+            // 两个结果互不影响：一个是确定性规则、一个是模型判断。
+            CitationChecker.Result audit = citationAuditService.audit(question, answer);
+            String flagged = audit.blocking().stream()
+                    .map(CitationChecker.Citation::raw)
+                    .reduce((a, b) -> a + "、" + b)
+                    .orElse("");
+            cases.add(new EvalCase(caseId, question, answer, verdict, audit.blocking().size(), flagged));
+        }
+
+        if (!replay) {
+            saveAnswerCache(cases);
         }
 
         String report = buildReport(cases);
@@ -184,13 +243,57 @@ class RagAnswerQualityEvalTest {
         }
     }
 
+    /** 读上一次的「问题 + 回答 + 判分」，只用于 {@code -Dreplay=true} */
+    private List<EvalCase> loadAnswerCache() {
+        if (!Files.exists(ANSWER_CACHE)) {
+            return List.of();
+        }
+        List<EvalCase> list = new ArrayList<>();
+        try {
+            for (String line : Files.readAllLines(ANSWER_CACHE, StandardCharsets.UTF_8)) {
+                line = line.trim();
+                if (line.isEmpty()) {
+                    continue;
+                }
+                JSONObject o = JSONUtil.parseObj(line);
+                list.add(new EvalCase(o.getInt("id"), o.getStr("question"), o.getStr("answer"),
+                        new JudgeVerdict(o.getInt("score"), o.getBool("grounded"), o.getStr("reason")),
+                        0, ""));
+            }
+        } catch (Exception e) {
+            log.warn("读取答案缓存失败（忽略缓存改走真实调用）：{}", e.getMessage());
+            return List.of();
+        }
+        return list;
+    }
+
+    private void saveAnswerCache(List<EvalCase> cases) {
+        try {
+            Files.createDirectories(ANSWER_CACHE.getParent());
+            StringBuilder sb = new StringBuilder();
+            for (EvalCase c : cases) {
+                sb.append(JSONUtil.createObj()
+                        .set("id", c.id())
+                        .set("question", c.question())
+                        .set("answer", c.answer())
+                        .set("score", c.verdict().score())
+                        .set("grounded", c.verdict().grounded())
+                        .set("reason", c.verdict().reason())
+                        .toString()).append('\n');
+            }
+            Files.writeString(ANSWER_CACHE, sb.toString(), StandardCharsets.UTF_8);
+            log.info("答案已缓存到 {}（下次可用 -Dreplay=true 免费重算校验）", ANSWER_CACHE.toAbsolutePath());
+        } catch (Exception e) {
+            log.warn("写答案缓存失败：{}", e.getMessage());
+        }
+    }
+
     /**
      * 重现"模型当时看到的检索片段"。
      * <p>
      * 检索参数必须和 {@code JobApp} 保持一致（topK=4 + 同一个阈值），否则 judge 看到的依据
      * 和模型看到的不是同一份，结论就不可比。
-     */
-    private String retrieveContext(String question) {
+     */    private String retrieveContext(String question) {
         try {
             List<Document> docs = jobVectorStore.similaritySearch(SearchRequest.builder()
                     .query(question)
@@ -299,11 +402,12 @@ class RagAnswerQualityEvalTest {
     private String buildReport(List<EvalCase> cases) {
         StringBuilder sb = new StringBuilder();
         sb.append("\n\n### RAG 答案质量评测（LLM-as-judge，样本 ").append(cases.size()).append(" 条）\n\n");
-        sb.append("| # | 得分 | grounded | 扣分点 |\n|---|---|---|---|\n");
+        sb.append("| # | 得分 | grounded | 断言拦截 | 扣分点 |\n|---|---|---|---|---|\n");
         for (EvalCase c : cases) {
-            sb.append(String.format("| %d | %d | %s | %s |\n",
+            sb.append(String.format("| %d | %d | %s | %s | %s |\n",
                     c.id(), c.verdict().score(),
                     c.verdict().grounded() ? "是" : "**否**",
+                    c.blockingCount() == 0 ? "-" : "**" + c.blockingCount() + "**：" + c.flagged(),
                     c.verdict().reason() == null ? "" : c.verdict().reason().replace("|", "/")));
         }
 
@@ -320,7 +424,51 @@ class RagAnswerQualityEvalTest {
         sb.append("> ✅ **grounded 已改为「上下文感知」**：judge 现在能看到检索片段，"
                 + "「引自素材」不再被算成编造 —— 上一版没有片段，判出来的其实是「具体程度」而不是「编造率」。\n");
         sb.append("> ⚠️ judge 与作答同模型，分数偏宽松；**只看同一项目内部的相对变化，不要跨项目比较绝对值**。\n");
+
+        appendCitationSection(sb, cases);
         return sb.toString();
+    }
+
+    /**
+     * 断言校验器的效果面。
+     * <p>
+     * 这里只能算**代理指标**，说清楚免得自欺：
+     * <ul>
+     *   <li><b>拦截率</b> = judge 判 grounded=false 的样本里，被 checker 标出具体值的比例。
+     *       分母里混着"拒绝作答"这类没有数值可拦的样本（judge 也判它 grounded=false），
+     *       所以这个数是<b>下限</b>，真实召回更高。</li>
+     *   <li><b>误伤面</b> = judge 判 grounded=true 的样本里被标出的比例。
+     *       但 grounded=true 不等于"每个数字都有出处" —— 有些正确回答确实会给出资料外的真实常识
+     *       （比如举例说明"P99 该怎么测"）。所以这个数是<b>上限</b>，真实误报更低。</li>
+     * </ul>
+     * 两者都朝保守方向偏，正好可以用来判断"这一层能不能默认开"。
+     */
+    private void appendCitationSection(StringBuilder sb, List<EvalCase> cases) {
+        List<EvalCase> judged = cases.stream().filter(c -> c.verdict().score() >= 0).toList();
+        if (judged.isEmpty()) {
+            return;
+        }
+        List<EvalCase> bad = judged.stream().filter(c -> !c.verdict().grounded()).toList();
+        List<EvalCase> good = judged.stream().filter(c -> c.verdict().grounded()).toList();
+        long badCaught = bad.stream().filter(c -> c.blockingCount() > 0).count();
+        long goodFlagged = good.stream().filter(c -> c.blockingCount() > 0).count();
+
+        sb.append("\n#### 断言校验（CitationChecker）效果面\n\n");
+        sb.append("| 指标 | 值 | 说明 |\n|---|---|---|\n");
+        sb.append(String.format("| 拦截率（代理，下限） | %d / %d | judge 判「不 grounded」且被标出具体值 |\n",
+                badCaught, bad.size()));
+        sb.append(String.format("| 误伤面（代理，上限） | %d / %d | judge 判「grounded」却仍被标出 |\n",
+                goodFlagged, good.size()));
+        sb.append(String.format("| 零拦截样本 | %d / %d | 没有可拦的具体数值，或全部有出处 |\n",
+                judged.stream().filter(c -> c.blockingCount() == 0).count(), judged.size()));
+
+        if (goodFlagged > 0) {
+            sb.append("\n> 「grounded 但被标出」的样本需要人眼复核是真误报、还是 judge 判松了：\n");
+            good.stream().filter(c -> c.blockingCount() > 0).forEach(c ->
+                    sb.append("> - #").append(c.id()).append("：").append(c.flagged()).append('\n'));
+        }
+        sb.append("\n> ⚠️ 两个都是代理指标：拦截率是<b>下限</b>（分母含无值可拦的拒答样本），"
+                + "误伤面是<b>上限</b>（grounded=true 不等于每个数字都有出处）。真实值要人眼抽查。\n");
     }
 
     private List<String> loadPositiveQuestions() throws Exception {
