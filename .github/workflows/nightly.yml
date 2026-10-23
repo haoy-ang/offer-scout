@@ -4,12 +4,18 @@ name: nightly-ai-eval
 #   backend-ci 把 @Tag("requires-ai") 全部排除了 —— 因为它要真实 API Key、要花钱、还要跑十几分钟。
 #   这很合理，但它留下一个盲区：**最核心的 AI 链路（Agent 循环 / 问答 / RAG / 两个评测）一次都没在 CI 里跑过。**
 #   结果就是"CI 绿"只证明"不烧钱的代码没坏"，不证明 AI 功能是好的。
-#   折中做法：日常 CI 保持快和免费；AI 档放这里，每天一次 + 可手动触发。
-#   这样一来，「我做过实验」就变成了「我每天在跑实验」，评估报告还自动留档。
+#   折中做法：日常 CI 保持快和免费；AI 档放这里，**手动触发**。
+#   这样一来，「我做过实验」就变成了「我有一套可重跑的评测」，评估报告还自动留档。
+#   注：本文件原本是每天定时跑的，2026-10-23 关掉了定时（见下面 on: 的说明）。
+# ⚠️ 2026-10-23：定时触发**已关闭**，只保留手动触发（workflow_dispatch）。
+# 原因：暂不打算配 DASHSCOPE_API_KEY secret。而 cron 一旦开着，每天 02:00 都会因缺 key
+# 失败一次 —— Actions 页会攒出一屏红叉，对面试官是负分，比"没有 nightly"更糟。
+# 恢复方式：① 仓库 Settings → Secrets and variables → Actions 加 DASHSCOPE_API_KEY；
+#          ② 把下面 schedule 段取消注释。
 on:
-  schedule:
-    # UTC 18:00 = 北京时间次日 02:00，避开白天的提交高峰，也不跟 backend-ci 抢配额
-    - cron: '0 18 * * *'
+  # schedule:
+  #   # UTC 18:00 = 北京时间次日 02:00，避开白天的提交高峰，也不跟 backend-ci 抢配额
+  #   - cron: '0 18 * * *'
   workflow_dispatch:
 
 jobs:
